@@ -52,16 +52,47 @@ export function validateTarget(raw) {
   return { url: url.href };
 }
 
+// The target rides in the path, not the query string: a GET form replaces the
+// action's whole query with its own fields, which would wipe out ?url=... and
+// break every search box on every site.
+// Only characters that would change how the URL parses are escaped; "/", ":",
+// "?", "&" and "=" stay literal so form parameters can append cleanly.
+const UNSAFE_IN_PATH = /[ "'<>`{}|\^,#]/g;
+
+export function encodeTarget(absolute) {
+  return absolute.replace(UNSAFE_IN_PATH, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+}
+
 /** Absolute URL -> a link back through this proxy. Left alone for non-navigable schemes. */
 export function proxify(raw, base, origin = '') {
   if (raw == null) return raw;
   const v = String(raw).trim();
   if (!v || SKIP.test(v)) return raw;
   try {
-    return `${origin}/proxy?url=${encodeURIComponent(new URL(v, base).href)}`;
+    return `${origin}/proxy/${encodeTarget(new URL(v, base).href)}`;
   } catch {
     return raw;
   }
+}
+
+/**
+ * Pull the target out of a proxy request URL. Accepts the path form
+ * (/proxy/https://site/x?a=1, what rewritten pages use) and the legacy
+ * query form (/proxy?url=...), which the address bar still produces.
+ */
+export function targetFromRequestUrl(requestUrl) {
+  let url;
+  try {
+    url = new URL(requestUrl);
+  } catch {
+    return '';
+  }
+  if (url.pathname === '/proxy' || url.pathname === '/proxy/') return url.searchParams.get('url') || '';
+  if (!url.pathname.startsWith('/proxy/')) return '';
+
+  // Servers and browsers collapse the "//" after the scheme; put it back.
+  const rest = decodeURIComponent(url.pathname.slice('/proxy/'.length)).replace(/^(https?:)\/*/i, '$1//');
+  return rest + url.search;
 }
 
 /** srcset is "url 1x, url 2x" - proxy each URL, keep each descriptor. */
@@ -84,4 +115,21 @@ export function rewriteCss(text, base, origin = '') {
   return String(text)
     .replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (_m, q, u) => `url(${q}${proxify(u, base, origin)}${q})`)
     .replace(/@import\s+(['"])([^'"]+)\1/gi, (_m, q, u) => `@import ${q}${proxify(u, base, origin)}${q}`);
+}
+
+// Content types a browser is expected to display rather than save.
+const INLINE_TYPES = /^(text\/|image\/|video\/|audio\/|font\/|application\/(javascript|ecmascript|json|xml|xhtml\+xml|pdf|manifest\+json|wasm))/;
+
+export function isInlineType(contentType) {
+  return INLINE_TYPES.test(String(contentType || '').toLowerCase().split(';')[0].trim());
+}
+
+/** Last path segment of a URL, for naming a download. "" when there is none. */
+export function filenameFrom(url) {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || '');
+    return /[\/:*?"<>|]/.test(name) ? '' : name;
+  } catch {
+    return '';
+  }
 }

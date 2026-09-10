@@ -27,10 +27,16 @@ with build command `npm run build`.
 | Path | Does |
 |---|---|
 | `public/index.html` | Whole UI. Tailwind via CDN, no build step. |
-| `src/worker.js` | Entry. `/proxy?url=…` fetches the site, strips frame-blocking headers, rewrites links back through itself; everything else falls through to the assets. |
+| `src/worker.js` | Entry. `/proxy/<url>` fetches the site, strips frame-blocking headers, forwards `Range` for video, names downloads, rewrites links back through itself; everything else falls through to the assets. |
 | `src/lib.js` | URL validation + rewriting helpers. Pure, tested. |
 | `build.mjs` | Copies `public/` to `dist/` (what the Worker serves as assets). |
 | `wrangler.jsonc` | Worker name, entry script, assets directory. |
+
+## Notes
+
+- The target rides in the path: `/proxy/https://example.com/page`. A GET form replaces the
+  action's query string, so `?url=` would be wiped by any search box. `/proxy?url=…` still works.
+- Video seeking, range requests and downloads with real filenames all work.
 
 ## Limits
 
@@ -38,4 +44,6 @@ with build command `npm run build`.
 - ⚠ Proxied pages run on this origin, so their scripts share it with this page. Keep nothing sensitive here.
 - Cookies from proxied sites are dropped — logins do not persist.
 - JS-heavy apps that fetch at runtime partly break; static and content sites work.
+- Google search returns its bot check — one IP, and no cookies to solve the captcha with.
+- Some sites block proxies outright (chatgpt.com, amazon.com, stackoverflow.com).
 - Requests time out at 15s.

@@ -22,7 +22,7 @@ those headers, so it is required — do not "simplify" it away.
 ## Files
 
 - `public/index.html` — UI. Tailwind play CDN. Everything inline, one file.
-- `src/worker.js` — entry. Routes `/proxy` itself, everything else to `env.ASSETS`. Uses
+- `src/worker.js` — entry. Routes `/proxy/<url>` itself, everything else to `env.ASSETS`. Uses
   `HTMLRewriter` (native Cloudflare API, not a library) to rewrite
   `href/src/srcset/action/style` back through the proxy.
 - `src/lib.js` — pure helpers, no platform APIs, so `node --test` can run them.
@@ -35,6 +35,10 @@ those headers, so it is required — do not "simplify" it away.
 - Any rewriting change needs a case in `test/lib.test.mjs`.
 - Rewritten URLs are **absolute** (worker origin). They must stay absolute: an injected
   `<base href>` points at the target site and would hijack root-relative ones.
+- The target goes in the **path**, never back into a query parameter. A GET form replaces its
+  action's entire query string, which silently deleted `?url=` and broke every search box.
+- `Range` and the conditional headers must stay in `FORWARD_HEADERS`, and `206`/`304`/`204`/
+  `HEAD` must skip rewriting — otherwise video seeking refetches whole files or corrupts.
 - SSRF blocklist in `isBlockedHost` covers loopback/private/link-local/metadata IPs plus
   encoded forms (`2130706433`, `0x7f000001`, `0177.0.0.1`, trailing-dot hosts). Do not loosen it.
 - Redirects are re-validated after `fetch` (`upstream.url`), not only up front.

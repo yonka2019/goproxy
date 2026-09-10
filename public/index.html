@@ -18,10 +18,12 @@
   <header class="shrink-0 border-b border-neutral-200 dark:border-neutral-800">
     <form id="form" class="flex flex-wrap items-center gap-2 p-3">
       <input id="url" type="text" inputmode="url" autocomplete="off" autofocus
-        placeholder="Paste any link"
+        placeholder="Enter any link"
         class="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:focus:border-neutral-300">
-      <button type="button" id="paste"
-        class="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">Paste</button>
+      <button type="button" id="back" disabled aria-label="Back"
+        class="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800">Back</button>
+      <button type="button" id="forward" disabled aria-label="Forward"
+        class="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800">Forward</button>
       <button type="submit"
         class="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300">Go</button>
     </form>
@@ -50,15 +52,27 @@
 const $ = (id) => document.getElementById(id);
 const form = $('form'), input = $('url'), errorEl = $('error');
 const view = $('view'), loading = $('loading'), empty = $('empty');
+const back = $('back'), forward = $('forward');
 
 // Mirrors the server's rule so obvious mistakes never leave the browser.
 const BAD_SCHEME = /^(javascript|data|file|blob|about|mailto|tel):/i;
 
+// Our own history, so Back/Forward also cover links clicked inside the proxied
+// page. `at` is the current position; a fresh navigation drops everything after it.
+const visited = [];
+let at = -1;
+let replaying = false;
+let readyPoll = 0;
+
+function syncButtons() {
+  back.disabled = at < 1;
+  forward.disabled = at < 0 || at >= visited.length - 1;
+}
+
 function fail(msg) {
   errorEl.textContent = msg;
   errorEl.classList.remove('hidden');
-  loading.classList.remove('grid');
-  loading.classList.add('hidden');
+  settled();
 }
 
 function open_(raw) {
@@ -70,25 +84,74 @@ function open_(raw) {
   empty.classList.add('hidden');
   loading.classList.remove('hidden');
   loading.classList.add('grid');
+  view.src = '/proxy/' + value.replace(/[ "'<>`{}|\^,#]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+  waitForRender();
+}
 
-  view.src = '/proxy?url=' + encodeURIComponent(value);
+// `load` on an iframe waits for every subresource, and sites that hold a
+// connection open (Google, anything long-polling) never reach it - the overlay
+// would sit there forever. Reveal as soon as the document is parsed instead.
+function waitForRender() {
+  clearInterval(readyPoll);
+  const startedAt = Date.now();
+  readyPoll = setInterval(() => {
+    let parsed = false;
+    try {
+      parsed = view.contentDocument && view.contentDocument.readyState !== 'loading';
+    } catch {
+      parsed = true; // cross-origin: nothing to wait for that we can see
+    }
+    if (parsed || Date.now() - startedAt > 8000) settled();
+  }, 120);
+}
+
+function settled() {
+  clearInterval(readyPoll);
+  loading.classList.remove('grid');
+  loading.classList.add('hidden');
 }
 
 form.addEventListener('submit', (e) => { e.preventDefault(); open_(input.value); });
 
 view.addEventListener('load', () => {
-  loading.classList.remove('grid');
-  loading.classList.add('hidden');
+  settled();
+
+  // Proxied pages share this origin, so their location is readable. If that ever
+  // stops being true the history simply keeps only what was typed.
+  let landed = null;
+  try {
+    const here = new URL(view.contentWindow.location.href);
+    if (here.pathname.startsWith('/proxy/')) {
+      landed = decodeURIComponent(here.pathname.slice('/proxy/'.length)).replace(/^(https?:)\/*/i, '$1//') + here.search;
+    } else if (here.pathname === '/proxy') {
+      landed = here.searchParams.get('url');
+    }
+  } catch {}
+
+  if (landed) {
+    input.value = landed;
+    if (!replaying && landed !== visited[at]) {
+      visited.splice(at + 1);
+      visited.push(landed);
+      at = visited.length - 1;
+    }
+  }
+  replaying = false;
+  syncButtons();
 });
 
-$('paste').addEventListener('click', async () => {
-  try {
-    const text = await navigator.clipboard.readText();
-    if (text) { input.value = text.trim(); open_(input.value); }
-  } catch {
-    input.focus();
-  }
-});
+function go(step) {
+  const next = at + step;
+  if (next < 0 || next >= visited.length) return;
+  at = next;
+  replaying = true;
+  input.value = visited[at];
+  open_(visited[at]);
+  syncButtons();
+}
+
+back.addEventListener('click', () => go(-1));
+forward.addEventListener('click', () => go(1));
 </script>
 </body>
 </html>

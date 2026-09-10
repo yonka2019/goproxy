@@ -1,12 +1,13 @@
 // Cloudflare Worker entry.
-//   /proxy?url=<absolute url>  -> fetch the target, strip frame-blocking headers,
+//   /proxy/<absolute url>      -> fetch the target, strip frame-blocking headers,
 //                                 rewrite links so it keeps navigating through here
+//                                 (/proxy?url=... still works for the address bar)
 //   everything else            -> static assets from dist/
 //
 // A Worker has one entry script, so routing is explicit; there is no functions/
 // folder to scan the way Cloudflare Pages does.
 
-import { validateTarget, proxify, proxifySrcset, rewriteCss } from './lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl } from './lib.js';
 
 const TIMEOUT_MS = 15000;
 const CSS_MAX_BYTES = 2 * 1024 * 1024;
@@ -25,14 +26,27 @@ const STRIP_HEADERS = [
   'content-length',
 ];
 
+// Range and the conditional headers are what make video seeking and browser
+// caching work; without them every seek refetches the whole file.
+const FORWARD_HEADERS = [
+  'user-agent',
+  'accept',
+  'accept-language',
+  'range',
+  'if-range',
+  'if-none-match',
+  'if-modified-since',
+];
+
 const SRC_TAGS = 'script[src], img[src], iframe[src], frame[src], source[src], video[src], audio[src], embed[src], input[src], track[src]';
 
 export default {
   fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname !== '/proxy') return env.ASSETS.fetch(request);
+    const isProxy = url.pathname === '/proxy' || url.pathname.startsWith('/proxy/');
+    if (!isProxy) return env.ASSETS.fetch(request);
     if (request.method !== 'GET' && request.method !== 'HEAD') {
-      return new Response('Method not allowed', { status: 405 });
+      return new Response('Method not allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
     }
     return handleProxy(request, url);
   },
@@ -40,21 +54,26 @@ export default {
 
 async function handleProxy(request, url) {
   const origin = url.origin;
-  const raw = url.searchParams.get('url');
+  const raw = targetFromRequestUrl(request.url);
 
   const target = validateTarget(raw);
   if (target.error) return errorPage(target.error, 400);
 
+  const forwarded = new Headers();
+  for (const name of FORWARD_HEADERS) {
+    const value = request.headers.get(name);
+    if (value) forwarded.set(name, value);
+  }
+  if (!forwarded.has('user-agent')) forwarded.set('user-agent', 'Mozilla/5.0');
+  if (!forwarded.has('accept')) forwarded.set('accept', '*/*');
+
   let upstream;
   try {
     upstream = await fetch(target.url, {
+      method: request.method,
       redirect: 'follow',
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: {
-        'user-agent': request.headers.get('user-agent') || 'Mozilla/5.0',
-        accept: request.headers.get('accept') || '*/*',
-        'accept-language': request.headers.get('accept-language') || 'en-US,en;q=0.9',
-      },
+      headers: forwarded,
     });
   } catch (err) {
     const msg = err?.name === 'TimeoutError' ? 'Timed out after 15s.' : `Could not reach it: ${err?.message || err}`;
@@ -68,6 +87,20 @@ async function handleProxy(request, url) {
   const headers = new Headers(upstream.headers);
   for (const h of STRIP_HEADERS) headers.delete(h);
   const type = (headers.get('content-type') || '').toLowerCase();
+
+  // Downloads: the browser would otherwise name the file after our own path and
+  // save it as "proxy". Only touch types it would not have displayed anyway.
+  if (!headers.has('content-disposition') && !isInlineType(type)) {
+    const name = filenameFrom(base);
+    if (name) headers.set('content-disposition', `attachment; filename="${name.replace(/"/g, '')}"`);
+  }
+
+  // 204/304 and HEAD carry no body, and a partial response is a slice of bytes -
+  // rewriting either would corrupt it.
+  const bodyless = request.method === 'HEAD' || upstream.status === 204 || upstream.status === 304;
+  const partial = upstream.status === 206;
+  if (bodyless) return new Response(null, { status: upstream.status, headers });
+  if (partial) return new Response(upstream.body, { status: 206, headers });
 
   if (type.includes('text/html')) {
     return rewriteHtml(new Response(upstream.body, { status: upstream.status, headers }), base, origin);

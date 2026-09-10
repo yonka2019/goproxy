@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost } from '../src/lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl } from '../src/lib.js';
 
 test('validateTarget adds https to a bare domain', () => {
   assert.equal(validateTarget('example.com').url, 'https://example.com/');
@@ -45,11 +45,10 @@ test('validateTarget rejects empty input', () => {
 });
 
 test('proxify resolves relative urls against the page', () => {
-  assert.equal(
-    proxify('/a.png', 'https://example.com/x/y', 'https://p.dev'),
-    'https://p.dev/proxy?url=https%3A%2F%2Fexample.com%2Fa.png',
-  );
-  assert.equal(proxify('b.png', 'https://example.com/x/y', ''), '/proxy?url=https%3A%2F%2Fexample.com%2Fx%2Fb.png');
+  assert.equal(proxify('/a.png', 'https://example.com/x/y', 'https://p.dev'), 'https://p.dev/proxy/https://example.com/a.png');
+  assert.equal(proxify('b.png', 'https://example.com/x/y', ''), '/proxy/https://example.com/x/b.png');
+  // commas would split a srcset, "#" would become a fragment
+  assert.equal(proxify('/a,b.png', 'https://example.com/', ''), '/proxy/https://example.com/a%2Cb.png');
 });
 
 test('proxify leaves non-navigable values alone', () => {
@@ -61,19 +60,49 @@ test('proxify leaves non-navigable values alone', () => {
 test('proxifySrcset keeps descriptors', () => {
   assert.equal(
     proxifySrcset('/a.png 1x, /b.png 2x', 'https://example.com/', ''),
-    '/proxy?url=https%3A%2F%2Fexample.com%2Fa.png 1x, /proxy?url=https%3A%2F%2Fexample.com%2Fb.png 2x',
+    '/proxy/https://example.com/a.png 1x, /proxy/https://example.com/b.png 2x',
   );
 });
 
 test('rewriteCss rewrites url() and @import', () => {
   assert.equal(
     rewriteCss('a{background:url(/x.png)}', 'https://example.com/', ''),
-    'a{background:url(/proxy?url=https%3A%2F%2Fexample.com%2Fx.png)}',
+    'a{background:url(/proxy/https://example.com/x.png)}',
   );
   assert.equal(
     rewriteCss('@import "theme.css";', 'https://example.com/css/', ''),
-    '@import "/proxy?url=https%3A%2F%2Fexample.com%2Fcss%2Ftheme.css";',
+    '@import "/proxy/https://example.com/css/theme.css";',
   );
   assert.equal(rewriteCss('a{background:url(data:image/gif;base64,AA)}', 'https://example.com/', ''),
     'a{background:url(data:image/gif;base64,AA)}');
+});
+
+test('isInlineType keeps page assets inline and marks real files as downloads', () => {
+  for (const t of ['text/html; charset=utf-8', 'image/png', 'application/javascript', 'application/pdf', 'font/woff2']) {
+    assert.equal(isInlineType(t), true, t);
+  }
+  for (const t of ['application/zip', 'application/octet-stream', 'application/vnd.ms-excel', '']) {
+    assert.equal(isInlineType(t), false, t);
+  }
+});
+
+test('filenameFrom takes the last path segment', () => {
+  assert.equal(filenameFrom('https://example.com/files/report%202024.zip?x=1'), 'report 2024.zip');
+  assert.equal(filenameFrom('https://example.com/'), '');
+  assert.equal(filenameFrom('not a url'), '');
+});
+
+test('targetFromRequestUrl survives a GET form appending its own query', () => {
+  // The exact failure: a GET form replaces the action's query string, so ?url= is lost.
+  assert.equal(
+    targetFromRequestUrl('http://h/proxy/https://www.google.com/search?q=hello&hl=en'),
+    'https://www.google.com/search?q=hello&hl=en',
+  );
+});
+
+test('targetFromRequestUrl handles collapsed slashes and the legacy query form', () => {
+  assert.equal(targetFromRequestUrl('http://h/proxy/https:/example.com/a'), 'https://example.com/a');
+  assert.equal(targetFromRequestUrl('http://h/proxy?url=https%3A%2F%2Fexample.com'), 'https://example.com');
+  assert.equal(targetFromRequestUrl('http://h/'), '');
+  assert.equal(targetFromRequestUrl('nonsense'), '');
 });
