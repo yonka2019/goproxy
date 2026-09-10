@@ -133,3 +133,60 @@ export function filenameFrom(url) {
     return '';
   }
 }
+
+// Cookies. Every proxied site shares this one origin, so a raw pass-through would
+// hand site B the session cookies of site A. Each cookie is stored under the
+// domain that set it - "<domain>~<name>" - and only handed back to hosts that
+// domain would have matched. "~" is a legal cookie-name character and never
+// appears in a hostname, so the first one is always the separator.
+const NS = '~';
+const COOKIE_NAME = /^[\w!#$%&'*+.^`|~-]+$/;
+const COOKIE_DOMAIN = /^[a-z0-9.-]+$/;
+
+const domainMatches = (host, domain) => host === domain || host.endsWith('.' + domain);
+
+/** The domain a Set-Cookie applies to: its own Domain= if it may claim it, else the host. */
+export function cookieDomain(setCookie, host) {
+  const m = /;\s*domain\s*=\s*\.?([^;]*)/i.exec(setCookie);
+  const d = m && m[1].trim().toLowerCase().replace(/\.+$/, '');
+  return d && COOKIE_DOMAIN.test(d) && domainMatches(host, d) ? d : host;
+}
+
+/**
+ * One upstream Set-Cookie -> one for our own origin. Domain and Path are dropped:
+ * the target's paths live under /proxy/... here, so the cookie has to cover "/".
+ * Returns null for anything unparseable rather than storing a broken cookie.
+ */
+export function rewriteSetCookie(setCookie, host) {
+  const s = String(setCookie);
+  const eq = s.indexOf('=');
+  const semi = s.indexOf(';');
+  if (eq < 1 || (semi !== -1 && semi < eq)) return null;
+  const name = s.slice(0, eq).trim();
+  if (!COOKIE_NAME.test(name)) return null;
+  const parts = s.slice(eq + 1).split(';');
+  const value = parts.shift().trim();
+  const attrs = parts.map((p) => p.trim()).filter((p) => p && !/^(domain|path)\s*=/i.test(p));
+  return [`${cookieDomain(s, host)}${NS}${name}=${value}`, 'Path=/', ...attrs].join('; ');
+}
+
+/** Our namespaced jar -> the Cookie header this host is allowed to see. */
+export function cookiesForHost(cookieHeader, host) {
+  const h = String(host).toLowerCase();
+  return String(cookieHeader || '')
+    .split(';')
+    .map((pair) => {
+      const c = pair.trim();
+      const eq = c.indexOf('=');
+      if (eq < 1) return null;
+      const key = c.slice(0, eq);
+      const i = key.indexOf(NS);
+      if (i < 1) return null;
+      const domain = key.slice(0, i).toLowerCase();
+      const name = key.slice(i + 1);
+      if (!name || !COOKIE_DOMAIN.test(domain) || !domainMatches(h, domain)) return null;
+      return `${name}=${c.slice(eq + 1)}`;
+    })
+    .filter(Boolean)
+    .join('; ');
+}

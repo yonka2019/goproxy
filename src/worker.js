@@ -7,7 +7,7 @@
 // A Worker has one entry script, so routing is explicit; there is no functions/
 // folder to scan the way Cloudflare Pages does.
 
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl } from './lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie } from './lib.js';
 
 const TIMEOUT_MS = 15000;
 const CSS_MAX_BYTES = 2 * 1024 * 1024;
@@ -16,7 +16,7 @@ const STRIP_HEADERS = [
   'x-frame-options',
   'content-security-policy',
   'content-security-policy-report-only',
-  'set-cookie',
+  'set-cookie', // dropped, then re-added namespaced per target host
   'report-to',
   'cross-origin-opener-policy',
   'cross-origin-embedder-policy',
@@ -67,6 +67,12 @@ async function handleProxy(request, url) {
   if (!forwarded.has('user-agent')) forwarded.set('user-agent', 'Mozilla/5.0');
   if (!forwarded.has('accept')) forwarded.set('accept', '*/*');
 
+  // Cookies: without them a site sees every request as a brand-new visitor, so
+  // Google answers "cookies are disabled" and no login or consent choice sticks.
+  // Only the jar belonging to this host is handed over (see cookiesForHost).
+  const jar = cookiesForHost(request.headers.get('cookie'), new URL(target.url).hostname);
+  if (jar) forwarded.set('cookie', jar);
+
   let upstream;
   try {
     upstream = await fetch(target.url, {
@@ -86,6 +92,10 @@ async function handleProxy(request, url) {
 
   const headers = new Headers(upstream.headers);
   for (const h of STRIP_HEADERS) headers.delete(h);
+  for (const raw of upstream.headers.getSetCookie()) {
+    const cookie = rewriteSetCookie(raw, new URL(base).hostname);
+    if (cookie) headers.append('set-cookie', cookie);
+  }
   const type = (headers.get('content-type') || '').toLowerCase();
 
   // Downloads: the browser would otherwise name the file after our own path and

@@ -1,5 +1,20 @@
 # Changelog
 
+## [v0.4.0] : 2026-09-10
+
+- Cookies now work. They used to be dropped in both directions - `set-cookie` was stripped
+  with the frame-blocking headers and `cookie` was never forwarded - so every request looked
+  like a first visit, no login survived a click and Google answered "cookies are disabled".
+- Each cookie is stored on our own origin as `<domain>~<name>` and handed only to hosts that
+  domain covers. A raw pass-through would have given one site another site's session, because
+  every proxied page shares this single origin. Parent-domain cookies still reach subdomains.
+- ⚠ Still shared: `document.cookie`. A proxied script can read another site's non-`HttpOnly`
+  cookies. Per-site isolation needs per-site subdomains; do not log in to anything you value.
+- Cookies set on a redirect hop are still lost - `fetch` uses `redirect: 'follow'`, which
+  returns only the final response's headers.
+- Docs: dev URL is `http://127.0.0.1:8787` (wrangler's default; both README and CLAUDE.md said
+  8788), and CLAUDE.md no longer points at the removed `functions/proxy.js`.
+
 ## [v0.3.0] : 2026-09-10
 
 - The target now travels in the path (`/proxy/https://site/page`) instead of `?url=`. A GET

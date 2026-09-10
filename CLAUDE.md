@@ -16,13 +16,14 @@ entry instead. Do not reintroduce `functions/`.
 ## Why a server function exists
 
 The browser cannot do this alone: sites send `X-Frame-Options` / `CSP frame-ancestors`
-that block iframing, and CORS blocks reading their HTML. `functions/proxy.js` strips
+that block iframing, and CORS blocks reading their HTML. `src/worker.js` strips
 those headers, so it is required — do not "simplify" it away.
 
 ## Files
 
 - `public/index.html` — UI. Tailwind play CDN. Everything inline, one file.
-- `src/worker.js` — entry. Routes `/proxy/<url>` itself, everything else to `env.ASSETS`. Uses
+- `src/worker.js` — entry. Routes `/proxy/<url>` itself, everything else to `env.ASSETS`. Carries
+  cookies both ways (namespaced, see below). Uses
   `HTMLRewriter` (native Cloudflare API, not a library) to rewrite
   `href/src/srcset/action/style` back through the proxy.
 - `src/lib.js` — pure helpers, no platform APIs, so `node --test` can run them.
@@ -39,6 +40,9 @@ those headers, so it is required — do not "simplify" it away.
   action's entire query string, which silently deleted `?url=` and broke every search box.
 - `Range` and the conditional headers must stay in `FORWARD_HEADERS`, and `206`/`304`/`204`/
   `HEAD` must skip rewriting — otherwise video seeking refetches whole files or corrupts.
+- Cookies are namespaced `<domain>~<name>` on our origin and filtered per target host
+  (`rewriteSetCookie` / `cookiesForHost`). Never pass them through raw: every site shares
+  this one origin, so a raw jar hands site B the session cookies of site A.
 - SSRF blocklist in `isBlockedHost` covers loopback/private/link-local/metadata IPs plus
   encoded forms (`2130706433`, `0x7f000001`, `0177.0.0.1`, trailing-dot hosts). Do not loosen it.
 - Redirects are re-validated after `fetch` (`upstream.url`), not only up front.
@@ -47,6 +51,7 @@ those headers, so it is required — do not "simplify" it away.
 
 ```
 npm test
-npm run dev   # http://127.0.0.1:8788
-curl "http://127.0.0.1:8788/proxy?url=https%3A%2F%2Fgithub.com" -D - -o /dev/null   # no x-frame-options in output
+npm run dev   # http://127.0.0.1:8787
+curl "http://127.0.0.1:8787/proxy/https://github.com" -D - -o /dev/null   # no x-frame-options in output
+curl "http://127.0.0.1:8787/proxy/https://www.google.com" -D - -o /dev/null   # set-cookie: google.com~...
 ```

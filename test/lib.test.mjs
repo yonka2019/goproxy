@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl } from '../src/lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost } from '../src/lib.js';
 
 test('validateTarget adds https to a bare domain', () => {
   assert.equal(validateTarget('example.com').url, 'https://example.com/');
@@ -105,4 +105,37 @@ test('targetFromRequestUrl handles collapsed slashes and the legacy query form',
   assert.equal(targetFromRequestUrl('http://h/proxy?url=https%3A%2F%2Fexample.com'), 'https://example.com');
   assert.equal(targetFromRequestUrl('http://h/'), '');
   assert.equal(targetFromRequestUrl('nonsense'), '');
+});
+
+test('rewriteSetCookie namespaces by domain and takes over the path', () => {
+  assert.equal(
+    rewriteSetCookie('NID=abc; expires=Fri, 12-Mar-2027 13:04:49 GMT; path=/; domain=.google.com; Secure; HttpOnly; SameSite=none', 'www.google.com'),
+    'google.com~NID=abc; Path=/; expires=Fri, 12-Mar-2027 13:04:49 GMT; Secure; HttpOnly; SameSite=none',
+  );
+  // No Domain= -> host-only, and a domain the host may not claim is ignored.
+  assert.equal(rewriteSetCookie('a=1', 'shop.example.com'), 'shop.example.com~a=1; Path=/');
+  assert.equal(rewriteSetCookie('a=1; domain=evil.com', 'example.com'), 'example.com~a=1; Path=/');
+  assert.equal(cookieDomain('a=1; Domain=EXAMPLE.COM.', 'www.example.com'), 'example.com');
+});
+
+test('rewriteSetCookie refuses what it cannot parse', () => {
+  for (const bad of ['', 'nonsense', '=1', 'a b=1', 'Secure; a=1']) {
+    assert.equal(rewriteSetCookie(bad, 'example.com'), null, bad);
+  }
+});
+
+test('cookiesForHost hands each site only its own cookies', () => {
+  const jar = 'google.com~NID=abc; evil.com~SESSION=steal; example.com~a=1';
+  assert.equal(cookiesForHost(jar, 'www.google.com'), 'NID=abc');
+  assert.equal(cookiesForHost(jar, 'evil.com'), 'SESSION=steal');
+  assert.equal(cookiesForHost(jar, 'notexample.com'), '');
+  // Cookies without our namespace (or with an unusable one) never leave.
+  assert.equal(cookiesForHost('plain=1; ~x=2', 'example.com'), '');
+  assert.equal(cookiesForHost('', 'example.com'), '');
+});
+
+test('a cookie survives a round trip through our jar', () => {
+  const stored = rewriteSetCookie('SEARCH_SAMESITE=CgQI4qEB; path=/; domain=.google.com; SameSite=strict', 'www.google.com');
+  const name = stored.split(';')[0];
+  assert.equal(cookiesForHost(name, 'accounts.google.com'), 'SEARCH_SAMESITE=CgQI4qEB');
 });
