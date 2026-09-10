@@ -1,13 +1,13 @@
 {
   "name": "goproxy",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "dev": "npm run build && wrangler pages dev dist --compatibility-date=2025-09-01",
+    "dev": "npm run build && wrangler dev",
     "test": "node --test",
-    "deploy": "npm run build && wrangler pages deploy dist"
+    "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4"

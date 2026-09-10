@@ -3,16 +3,22 @@
 const EXPLICIT_SCHEME = /^(mailto|data|javascript|tel|blob|about|file):/i;
 const HAS_SCHEME_SLASHES = /^[a-z][a-z0-9+.-]*:\/\//i;
 const SKIP = /^(#|\/\/#|mailto:|tel:|data:|javascript:|blob:|about:)/i;
+const DOTTED_QUAD = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
 /** Hosts we refuse to fetch: loopback, private, link-local, internal TLDs. */
 export function isBlockedHost(hostname) {
-  const h = String(hostname).toLowerCase().replace(/^\[|\]$/g, '');
+  // A trailing dot is a valid FQDN ("localhost.") and would slip past the name checks.
+  const h = String(hostname).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (!h) return true;
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  // Numeric hosts that are not a plain decimal dotted quad still resolve to IPv4
+  // (2130706433, 0x7f000001, 0177.0.0.1). Refuse them instead of decoding each form.
+  if (/^(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+))*$/.test(h) && !DOTTED_QUAD.test(h)) return true;
+  if (DOTTED_QUAD.test(h) && /(^|\.)0\d/.test(h)) return true;
   if (h === '::1' || h === '0:0:0:0:0:0:0:1' || h === '::') return true;
   if (/^f[cd][0-9a-f]{2}:/.test(h)) return true; // fc00::/7 unique-local
   if (/^fe80:/.test(h)) return true;             // link-local
-  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  const m = h.match(DOTTED_QUAD);
   if (m) {
     const a = Number(m[1]), b = Number(m[2]);
     if ([a, b, Number(m[3]), Number(m[4])].some((n) => n > 255)) return true;

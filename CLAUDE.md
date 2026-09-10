@@ -4,9 +4,14 @@ URL-entry page that renders any site in an iframe via a server-side proxy.
 
 ## Stack
 
-Plain JS + HTML on **Cloudflare Pages**. No framework, no bundler, no `wrangler.toml`
-(deliberate — Pages compiles `functions/` automatically; config lives in the dashboard:
-build `npm run build`, output `dist`).
+Plain JS + HTML on a **Cloudflare Worker**. No framework, no bundler, one dev dependency
+(wrangler). `wrangler.jsonc` is not optional: a Worker loads exactly the one script `main`
+names.
+
+This started as a Pages project with `functions/proxy.js`. That folder is a Pages-only
+convention — a Worker never scans it, so `/proxy` returned 404 while the static page loaded
+fine. The dashboard no longer offers Pages projects, so the code moved into a single Worker
+entry instead. Do not reintroduce `functions/`.
 
 ## Why a server function exists
 
@@ -17,8 +22,9 @@ those headers, so it is required — do not "simplify" it away.
 ## Files
 
 - `public/index.html` — UI. Tailwind play CDN. Everything inline, one file.
-- `functions/proxy.js` — `/proxy?url=…`. Uses `HTMLRewriter` (native Cloudflare API,
-  not a library) to rewrite `href/src/srcset/action/style` back through the proxy.
+- `src/worker.js` — entry. Routes `/proxy` itself, everything else to `env.ASSETS`. Uses
+  `HTMLRewriter` (native Cloudflare API, not a library) to rewrite
+  `href/src/srcset/action/style` back through the proxy.
 - `src/lib.js` — pure helpers, no platform APIs, so `node --test` can run them.
 - `test/lib.test.mjs` — `node --test`, plain `assert`, no framework.
 - `build.mjs` — copies `public/` → `dist/`.
@@ -29,14 +35,14 @@ those headers, so it is required — do not "simplify" it away.
 - Any rewriting change needs a case in `test/lib.test.mjs`.
 - Rewritten URLs are **absolute** (worker origin). They must stay absolute: an injected
   `<base href>` points at the target site and would hijack root-relative ones.
-- SSRF blocklist in `isBlockedHost` covers loopback/private/link-local/metadata IPs.
-  Do not loosen it.
+- SSRF blocklist in `isBlockedHost` covers loopback/private/link-local/metadata IPs plus
+  encoded forms (`2130706433`, `0x7f000001`, `0177.0.0.1`, trailing-dot hosts). Do not loosen it.
 - Redirects are re-validated after `fetch` (`upstream.url`), not only up front.
 
 ## Verify
 
 ```
 npm test
-npm run dev
+npm run dev   # http://127.0.0.1:8788
 curl "http://127.0.0.1:8788/proxy?url=https%3A%2F%2Fgithub.com" -D - -o /dev/null   # no x-frame-options in output
 ```

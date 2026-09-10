@@ -1,5 +1,21 @@
 # Changelog
 
+## [v0.2.0] : 2026-09-10
+
+- Deploy target changed from Cloudflare Pages to a Cloudflare Worker. The dashboard no longer
+  offers Pages projects, and `functions/` is a Pages-only convention: deployed as a Worker the
+  static page loaded but every `/proxy` request returned 404.
+- `functions/proxy.js` is now `src/worker.js`, a single entry that routes `/proxy` itself and
+  passes everything else to the assets binding.
+- Added `wrangler.jsonc`. A Worker loads exactly the one script `main` names, so this file is
+  required — Pages was the only configless option.
+- `npm run dev` / `npm run deploy` now use `wrangler dev` / `wrangler deploy`.
+- SSRF blocklist hardened: rejects trailing-dot hosts (`localhost.`), decimal, hex and octal
+  IPv4 encodings (`2130706433`, `0x7f000001`, `0177.0.0.1`, `0`) and numeric hosts that are not
+  a dotted quad.
+- Removed the recent-links list; nothing is written to `localStorage` any more.
+- README and CLAUDE.md document the Pages-vs-Workers trap.
+
 ## [v0.1.0] : 2026-09-10
 
 - First release.

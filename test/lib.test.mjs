@@ -25,6 +25,21 @@ test('validateTarget rejects internal addresses', () => {
   assert.equal(isBlockedHost('172.32.0.1'), false); // just outside the private range
 });
 
+test('validateTarget rejects encoded and trailing-dot forms of internal hosts', () => {
+  for (const bad of [
+    'http://localhost.',            // trailing dot is still localhost
+    'http://127.0.0.1./',
+    'http://2130706433',            // decimal 127.0.0.1
+    'http://0x7f000001',            // hex 127.0.0.1
+    'http://0177.0.0.1',            // octal 127.0.0.1
+    'http://0',                     // shorthand for 0.0.0.0
+    'http://192.168.1.1.1',         // numeric but not a quad
+  ]) {
+    assert.ok(validateTarget(bad).error, `${bad} should be blocked`);
+  }
+  assert.equal(validateTarget('https://example.com.').url, 'https://example.com./');
+});
+
 test('validateTarget rejects empty input', () => {
   assert.ok(validateTarget('').error);
 });

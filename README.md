@@ -10,20 +10,27 @@ npm run dev      # http://localhost:8788
 npm test
 ```
 
-## Deploy (Cloudflare Pages)
+## Deploy (Cloudflare Worker)
 
-Build command `npm run build`, output directory `dist`. No config file needed — Pages compiles `functions/` on its own.
+```
+npx wrangler login   # once
+npm run deploy
+```
 
-Or from the CLI: `npm run deploy`.
+Or connect the repo in the dashboard: Workers & Pages -> your Worker -> Settings -> Build,
+with build command `npm run build`.
+
+`wrangler.jsonc` is required — a Worker runs exactly one entry script and `main` names it.
 
 ## Layout
 
 | Path | Does |
 |---|---|
 | `public/index.html` | Whole UI. Tailwind via CDN, no build step. |
-| `functions/proxy.js` | `/proxy?url=…` — fetches the site, strips frame-blocking headers, rewrites links back through itself. |
+| `src/worker.js` | Entry. `/proxy?url=…` fetches the site, strips frame-blocking headers, rewrites links back through itself; everything else falls through to the assets. |
 | `src/lib.js` | URL validation + rewriting helpers. Pure, tested. |
-| `build.mjs` | Copies `public/` to `dist/`. |
+| `build.mjs` | Copies `public/` to `dist/` (what the Worker serves as assets). |
+| `wrangler.jsonc` | Worker name, entry script, assets directory. |
 
 ## Limits
 

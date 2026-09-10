@@ -1,8 +1,12 @@
-// Cloudflare Pages Function -> route: /proxy?url=<absolute url>
-// Fetches the target, strips frame-blocking headers, rewrites links so the
-// proxied page keeps navigating through here.
+// Cloudflare Worker entry.
+//   /proxy?url=<absolute url>  -> fetch the target, strip frame-blocking headers,
+//                                 rewrite links so it keeps navigating through here
+//   everything else            -> static assets from dist/
+//
+// A Worker has one entry script, so routing is explicit; there is no functions/
+// folder to scan the way Cloudflare Pages does.
 
-import { validateTarget, proxify, proxifySrcset, rewriteCss } from '../src/lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss } from './lib.js';
 
 const TIMEOUT_MS = 15000;
 const CSS_MAX_BYTES = 2 * 1024 * 1024;
@@ -23,9 +27,20 @@ const STRIP_HEADERS = [
 
 const SRC_TAGS = 'script[src], img[src], iframe[src], frame[src], source[src], video[src], audio[src], embed[src], input[src], track[src]';
 
-export async function onRequestGet({ request }) {
-  const origin = new URL(request.url).origin;
-  const raw = new URL(request.url).searchParams.get('url');
+export default {
+  fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname !== '/proxy') return env.ASSETS.fetch(request);
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response('Method not allowed', { status: 405 });
+    }
+    return handleProxy(request, url);
+  },
+};
+
+async function handleProxy(request, url) {
+  const origin = url.origin;
+  const raw = url.searchParams.get('url');
 
   const target = validateTarget(raw);
   if (target.error) return errorPage(target.error, 400);

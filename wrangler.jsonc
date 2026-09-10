@@ -1,0 +1,12 @@
+{
+  // Workers need this file: a Worker has exactly one entry script and it is named here.
+  // (Cloudflare Pages could infer everything from a functions/ folder; the dashboard no
+  // longer offers Pages projects, so this project is a Worker.)
+  "name": "goproxy",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  }
+}
