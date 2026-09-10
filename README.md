@@ -30,7 +30,7 @@ with build command `npm run build`.
 | `src/worker.js` | Entry. `/proxy/<url>` fetches the site, strips frame-blocking headers, forwards `Range` for video and cookies, names downloads, rewrites links back through itself; everything else falls through to the assets. |
 | `src/lib.js` | URL validation + rewriting helpers. Pure, tested. |
 | `build.mjs` | Copies `public/` to `dist/` (what the Worker serves as assets). |
-| `wrangler.jsonc` | Worker name, entry script, assets directory. |
+| `wrangler.jsonc` | Worker name, entry script, assets directory, log persistence. |
 
 ## Notes
 
@@ -42,6 +42,8 @@ with build command `npm run build`.
   inside a proxied page read and write the target's own names.
 - The browser's headers go upstream almost untouched, with `Referer` rewritten to the target's
   real URL and `Sec-Fetch-Dest: iframe` sent as `document`.
+- `history.pushState` is shimmed so single-page routers do not throw on our path and stop
+  hydrating - that is what kept video players from mounting.
 
 ## Limits
 
@@ -49,7 +51,8 @@ with build command `npm run build`.
 - ⚠ Proxied pages run on this origin, so their scripts share it with this page. Keep nothing sensitive here.
 - ⚠ Cookies are per-site upstream, but every proxied page shares this origin's `document.cookie`,
   so a proxied script can read another site's non-`HttpOnly` cookies. Do not log in to anything you care about.
-- JS-heavy apps that fetch at runtime partly break; static and content sites work.
+- JS-heavy apps partly break: `fetch`/`XHR` to the target's absolute URLs leave this origin and
+  hit CORS. Media on a CORS-open CDN still plays; a locked-down one does not.
 - Google search is answered by Bing. Google's own script checks the page's hostname, does not
   find `google.com`, and the reload it fires answers 429 - so `google.*/search?q=` is sent to
   Bing instead. The rest of Google proxies normally.

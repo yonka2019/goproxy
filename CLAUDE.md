@@ -45,8 +45,11 @@ those headers, so it is required — do not "simplify" it away.
   this one origin, so a raw jar hands site B the session cookies of site A.
 - `cookieShim` is the page-side half and has to stay first in `<head>`: without it a site's
   own JS writes cookies the server then drops, and reads back names it never wrote.
-- `cookieShim` is built with `String.raw`. A plain template literal eats `\s` and `\.`,
-  which silently turns the shim's regexes into garbage that still parses.
+- `cookieShim` and `historyShim` are built with `String.raw`. A plain template literal eats
+  `\s` and `\.`, which silently turns a shim's regexes into garbage that still parses.
+- `historyShim` exists because an SPA router passes `own origin + location.pathname` to
+  `pushState`; that is cross-origin here, the throw lands in the router and hydration stops
+  (13tv's video player never mounted). Both shims must stay ahead of every site script.
 - Request headers are a **blocklist** (`DROP_HEADERS`), not an allowlist. A request claiming
   to be Chrome with no `sec-ch-ua` / `sec-fetch-*` is a bot signal. `Referer` is rewritten by
   `proxiedReferer`, never forwarded raw - it would name this proxy.

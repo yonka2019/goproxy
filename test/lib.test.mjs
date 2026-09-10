@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost, cookieShim, proxiedReferer, swapUnproxyable } from '../src/lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost, cookieShim, historyShim, proxiedReferer, swapUnproxyable } from '../src/lib.js';
 
 test('validateTarget adds https to a bare domain', () => {
   assert.equal(validateTarget('example.com').url, 'https://example.com/');
@@ -206,4 +206,46 @@ test('swapUnproxyable sends a Google search to Bing, and leaves the rest alone',
   ]) {
     assert.equal(swapUnproxyable(keep), keep, keep);
   }
+});
+
+// Run the history shim against stubs, then read back what it handed the real call.
+function runHistory(base, origin, here) {
+  const seen = [];
+  function record(state, title, url) {
+    seen.push(arguments.length < 3 ? '<no url>' : url);
+  }
+  const History = { prototype: { pushState: record, replaceState: record } };
+  const location = { href: here };
+  new Function('History', 'location', historyShim(base, origin))(History, location);
+  return { h: History.prototype, seen };
+}
+
+test('historyShim keeps a pushState url on our own origin', () => {
+  const { h, seen } = runHistory(
+    'https://13tv.co.il/item/news/x/',
+    'https://goproxy.lol',
+    'https://goproxy.lol/proxy/https://13tv.co.il/item/news/x/?pid=7',
+  );
+
+  // The exact throw: the site prefixes its own origin onto our path.
+  h.pushState({}, '', 'https://13tv.co.il/proxy/https://13tv.co.il/item/news/x/?pid=7');
+  assert.equal(seen.at(-1), 'https://goproxy.lol/proxy/https://13tv.co.il/item/news/x/?pid=7');
+
+  // A route of its own, root-relative, has to keep pointing at the target.
+  h.replaceState({}, '', '/other/page?a=1');
+  assert.equal(seen.at(-1), 'https://goproxy.lol/proxy/https://13tv.co.il/other/page?a=1');
+
+  // An absolute url elsewhere gets wrapped; one already ours is left alone.
+  h.pushState({}, '', 'https://other.example/x');
+  assert.equal(seen.at(-1), 'https://goproxy.lol/proxy/https://other.example/x');
+  h.pushState({}, '', 'https://goproxy.lol/proxy/https://13tv.co.il/deep');
+  assert.equal(seen.at(-1), 'https://goproxy.lol/proxy/https://13tv.co.il/deep');
+});
+
+test('historyShim passes a two-argument pushState straight through', () => {
+  const { h, seen } = runHistory('https://s.test/', 'https://p.test', 'https://p.test/proxy/https://s.test/');
+  // Two arguments means "keep the current url"; supplying a third would navigate.
+  h.pushState({ a: 1 }, '');
+  assert.equal(seen.at(-1), '<no url>');
+  assert.equal(seen.length, 1);
 });

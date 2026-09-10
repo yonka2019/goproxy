@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.6.0] : 2026-09-10
+
+- Single-page apps hydrate again. A site's router calls `history.pushState` with its own origin
+  plus `location.pathname`, which here reads `/proxy/https://site/page`; the browser refuses a
+  state URL on another origin and the throw lands inside the router, so rendering stops. On
+  13tv that is why the video player never mounted and nothing played. `historyShim` maps
+  whatever the site passes onto a `/proxy/` URL of ours, which is same-origin and allowed.
+- Worker logs are on and persisted, so requests can be queried in the dashboard under
+  Workers & Pages -> goproxy -> Logs. ⚠ A logged request URL carries the whole proxied
+  target, so the log records every site each visitor opened.
+
 ## [v0.5.0] : 2026-09-10
 
 - `document.cookie` inside a proxied page now reads and writes the target's own cookie names.

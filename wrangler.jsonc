@@ -8,5 +8,13 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS"
+  },
+  // Worker logs in the dashboard: Workers & Pages -> goproxy -> Logs.
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "persist": true
+    }
   }
 }

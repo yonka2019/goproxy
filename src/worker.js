@@ -7,7 +7,7 @@
 // A Worker has one entry script, so routing is explicit; there is no functions/
 // folder to scan the way Cloudflare Pages does.
 
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie, cookieShim, proxiedReferer, swapUnproxyable } from './lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie, cookieShim, historyShim, proxiedReferer, swapUnproxyable } from './lib.js';
 
 const TIMEOUT_MS = 15000;
 const CSS_MAX_BYTES = 2 * 1024 * 1024;
@@ -188,7 +188,8 @@ function rewriteHtml(response, base, origin) {
     .on('head', {
       element(el) {
         el.prepend(
-          `<script>${cookieShim(new URL(base).hostname)}</script><base href="${escapeAttr(base)}">`,
+          `<script>${cookieShim(new URL(base).hostname)};${historyShim(base, origin)}</script>` +
+            `<base href="${escapeAttr(base)}">`,
           { html: true },
         );
       },

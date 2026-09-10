@@ -250,3 +250,31 @@ export function swapUnproxyable(href) {
   const q = u.searchParams.get('q');
   return q ? 'https://www.bing.com/search?q=' + encodeURIComponent(q) : href;
 }
+
+/**
+ * A single-page app under a path-carrying proxy calls history.pushState with a
+ * URL built from its own origin plus location.pathname - which here reads
+ * "/proxy/https://site/page". The browser refuses a state URL on another origin,
+ * the throw lands inside the router, and hydration stops: on 13tv the video
+ * player never mounts, so nothing plays. The shim maps whatever the site passes
+ * back onto a /proxy/ URL of ours, which is same-origin and therefore allowed.
+ */
+export function historyShim(base, origin) {
+  const t = JSON.stringify(new URL(base).origin);
+  const o = JSON.stringify(origin);
+  return String.raw`(function(){
+var T=${t},O=${o},P="/proxy/";
+function enc(u){return u.replace(/[ "'<>` + '`' + String.raw`{}|\^,#]/g,function(c){return "%"+c.charCodeAt(0).toString(16).toUpperCase()})}
+function map(u){
+if(u===null||u===undefined||u==="")return u;
+var r;try{r=new URL(String(u),location.href)}catch(e){return u}
+if(r.origin===O)return r.pathname.indexOf(P)===0?r.href:O+P+enc(T+r.pathname+r.search+r.hash);
+if(r.pathname.indexOf(P)===0)return O+r.pathname+r.search+r.hash;
+return O+P+enc(r.href)}
+["pushState","replaceState"].forEach(function(name){
+var f=History.prototype[name];
+if(!f)return;
+History.prototype[name]=function(state,title,url){
+return arguments.length<3?f.call(this,state,title):f.call(this,state,title,map(url))}});
+})()`;
+}
