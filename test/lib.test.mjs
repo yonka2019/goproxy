@@ -249,3 +249,20 @@ test('historyShim passes a two-argument pushState straight through', () => {
   assert.equal(seen.at(-1), '<no url>');
   assert.equal(seen.length, 1);
 });
+
+test('proxify leaves SDKs that must stay on their own domain alone', () => {
+  // IMA/PAL checks its own origin and throws, killing the page's React tree.
+  assert.equal(
+    proxify('https://imasdk.googleapis.com/pal/sdkloader/pal.js', 'https://13tv.co.il/', 'https://p.dev'),
+    'https://imasdk.googleapis.com/pal/sdkloader/pal.js',
+  );
+  assert.equal(
+    proxify('//securepubads.g.doubleclick.net/tag/js/gpt.js', 'https://13tv.co.il/', 'https://p.dev'),
+    'https://securepubads.g.doubleclick.net/tag/js/gpt.js',
+  );
+  // A lookalike host is not on the list.
+  assert.equal(
+    proxify('https://imasdk.googleapis.com.evil.test/pal.js', 'https://13tv.co.il/', 'https://p.dev'),
+    'https://p.dev/proxy/https://imasdk.googleapis.com.evil.test/pal.js',
+  );
+});

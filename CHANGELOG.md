@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.6.1] : 2026-09-10
+
+- Google's IMA/PAL ad SDK is no longer proxied, along with two doubleclick ad hosts. It checks
+  the domain it was served from, and when that read `goproxy.lol` it threw "IMA SDK is either
+  not loaded from a google domain or is not a supported version" from inside React's commit
+  phase, which unmounted the whole tree: 13tv rendered Next's "Application error" page instead
+  of the article. v0.6.0 exposed this by letting hydration get far enough to reach the SDK.
+  A `<script>` needs no CORS, so leaving those URLs on their own host still loads them.
+- A lookalike domain is not covered by the exemption - `imasdk.googleapis.com.evil.test` is
+  still proxied like anything else.
+
 ## [v0.6.0] : 2026-09-10
 
 - Single-page apps hydrate again. A site's router calls `history.pushState` with its own origin

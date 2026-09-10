@@ -63,13 +63,22 @@ export function encodeTarget(absolute) {
   return absolute.replace(UNSAFE_IN_PATH, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
 }
 
+// Some SDKs refuse to run unless they are served from their own domain. Google's
+// IMA/PAL throws "IMA SDK is either not loaded from a google domain or is not a
+// supported version" and the throw takes the whole React tree with it - 13tv shows
+// Next's "Application error" instead of the article. Leave those pointing at the
+// real host; a <script> needs no CORS, so it still loads.
+const DIRECT_HOSTS = /(^|\.)(imasdk\.googleapis\.com|pagead2\.googlesyndication\.com|securepubads\.g\.doubleclick\.net)$/;
+
 /** Absolute URL -> a link back through this proxy. Left alone for non-navigable schemes. */
 export function proxify(raw, base, origin = '') {
   if (raw == null) return raw;
   const v = String(raw).trim();
   if (!v || SKIP.test(v)) return raw;
   try {
-    return `${origin}/proxy/${encodeTarget(new URL(v, base).href)}`;
+    const u = new URL(v, base);
+    if (DIRECT_HOSTS.test(u.hostname)) return u.href;
+    return `${origin}/proxy/${encodeTarget(u.href)}`;
   } catch {
     return raw;
   }
