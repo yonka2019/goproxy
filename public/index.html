@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoProxy</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @media (prefers-reduced-motion: reduce) {
+    .animate-spin { animation: none; }
+    * { transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body class="h-full bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+<div class="flex h-full flex-col">
+
+  <header class="shrink-0 border-b border-neutral-200 dark:border-neutral-800">
+    <form id="form" class="flex flex-wrap items-center gap-2 p-3">
+      <input id="url" type="text" inputmode="url" autocomplete="off" autofocus
+        placeholder="Paste any link"
+        class="min-w-0 flex-1 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:focus:border-neutral-300">
+      <button type="button" id="paste"
+        class="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">Paste</button>
+      <button type="submit"
+        class="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300">Go</button>
+    </form>
+
+    <p id="error" class="hidden px-3 pb-2 text-sm text-red-600 dark:text-red-400"></p>
+
+  </header>
+
+  <main class="relative min-h-0 flex-1">
+    <iframe id="view" class="h-full w-full border-0 bg-white dark:bg-neutral-900" title="Proxied page"></iframe>
+
+    <div id="empty" class="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center text-sm text-neutral-500">
+      Enter a link above to open it here.
+    </div>
+
+    <div id="loading" class="absolute inset-0 hidden place-items-center gap-3 bg-white/80 text-sm text-neutral-500 dark:bg-neutral-950/80">
+      <div class="flex items-center gap-2">
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-neutral-400 border-t-transparent" aria-hidden="true"></span>
+        <span>Loading…</span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const form = $('form'), input = $('url'), errorEl = $('error');
+const view = $('view'), loading = $('loading'), empty = $('empty');
+
+// Mirrors the server's rule so obvious mistakes never leave the browser.
+const BAD_SCHEME = /^(javascript|data|file|blob|about|mailto|tel):/i;
+
+function fail(msg) {
+  errorEl.textContent = msg;
+  errorEl.classList.remove('hidden');
+  loading.classList.remove('grid');
+  loading.classList.add('hidden');
+}
+
+function open_(raw) {
+  const value = raw.trim();
+  if (!value) return fail('Enter a link.');
+  if (BAD_SCHEME.test(value)) return fail('Only http and https links work here.');
+
+  errorEl.classList.add('hidden');
+  empty.classList.add('hidden');
+  loading.classList.remove('hidden');
+  loading.classList.add('grid');
+
+  view.src = '/proxy?url=' + encodeURIComponent(value);
+}
+
+form.addEventListener('submit', (e) => { e.preventDefault(); open_(input.value); });
+
+view.addEventListener('load', () => {
+  loading.classList.remove('grid');
+  loading.classList.add('hidden');
+});
+
+$('paste').addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) { input.value = text.trim(); open_(input.value); }
+  } catch {
+    input.focus();
+  }
+});
+</script>
+</body>
+</html>
