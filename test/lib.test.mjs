@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost } from '../src/lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost, cookieShim, proxiedReferer, swapUnproxyable } from '../src/lib.js';
 
 test('validateTarget adds https to a bare domain', () => {
   assert.equal(validateTarget('example.com').url, 'https://example.com/');
@@ -138,4 +138,72 @@ test('a cookie survives a round trip through our jar', () => {
   const stored = rewriteSetCookie('SEARCH_SAMESITE=CgQI4qEB; path=/; domain=.google.com; SameSite=strict', 'www.google.com');
   const name = stored.split(';')[0];
   assert.equal(cookiesForHost(name, 'accounts.google.com'), 'SEARCH_SAMESITE=CgQI4qEB');
+});
+
+// The shim runs in the page, so exercise it against a stub jar the way a browser would.
+function runShim(host, stored = '') {
+  let jar = stored;
+  const document = {};
+  const Document = { prototype: {} };
+  Object.defineProperty(Document.prototype, 'cookie', {
+    configurable: true,
+    get: () => jar,
+    set: (v) => { jar = jar ? `${jar}; ${v.split(';')[0]}` : v.split(';')[0]; },
+  });
+  Object.setPrototypeOf(document, Document.prototype);
+  new Function('document', 'Document', cookieShim(host))(document, Document);
+  return { document, raw: () => jar };
+}
+
+test('cookieShim gives a page its own cookie names back', () => {
+  const { document } = runShim('www.google.com', 'google.com~NID=abc; evil.com~SESSION=steal; plain=1');
+  assert.equal(document.cookie, 'NID=abc');
+});
+
+test('cookieShim namespaces what a page writes, so the server can forward it', () => {
+  const { document, raw } = runShim('www.google.com');
+  document.cookie = 'SG_SS=token; path=/x; domain=.google.com; SameSite=none';
+  assert.equal(raw(), 'google.com~SG_SS=token');
+  assert.equal(document.cookie, 'SG_SS=token');
+  // The stored form is exactly what cookiesForHost hands back to the target.
+  assert.equal(cookiesForHost(raw(), 'www.google.com'), 'SG_SS=token');
+});
+
+test('cookieShim refuses a domain the page may not claim, and junk writes', () => {
+  const { document, raw } = runShim('example.com');
+  document.cookie = 'a=1; domain=evil.com';
+  assert.equal(raw(), 'example.com~a=1');
+  document.cookie = 'nonsense';
+  assert.equal(raw(), 'example.com~a=1');
+});
+
+test('proxiedReferer hands the target its own url, never ours', () => {
+  assert.equal(
+    proxiedReferer('http://127.0.0.1:20777/proxy/https://www.google.com/search?q=x'),
+    'https://www.google.com/search?q=x',
+  );
+  // Our UI page, a bare origin and junk all leak nothing.
+  assert.equal(proxiedReferer('http://127.0.0.1:20777/'), '');
+  assert.equal(proxiedReferer(''), '');
+  assert.equal(proxiedReferer('http://127.0.0.1:20777/proxy/http://127.0.0.1:20777/'), '');
+});
+
+test('swapUnproxyable sends a Google search to Bing, and leaves the rest alone', () => {
+  assert.equal(
+    swapUnproxyable('https://www.google.com/search?q=prediction+markets&hl=en'),
+    'https://www.bing.com/search?q=prediction%20markets',
+  );
+  assert.equal(swapUnproxyable('https://google.co.il/search?q=%D7%9E%D7%96%D7%92'), 'https://www.bing.com/search?q=%D7%9E%D7%96%D7%92');
+  // Only /search with a query; the rest of Google proxies fine on its own.
+  for (const keep of [
+    'https://www.google.com/',
+    'https://www.google.com/search',
+    'https://news.google.com/topics/x',
+    'https://googleusercontent.com/search?q=x',
+    'https://www.google.com.evil.test/search?q=x',
+    'https://mail.google.com/mail/u/0',
+    'not a url',
+  ]) {
+    assert.equal(swapUnproxyable(keep), keep, keep);
+  }
 });

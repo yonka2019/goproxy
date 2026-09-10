@@ -190,3 +190,63 @@ export function cookiesForHost(cookieHeader, host) {
     .filter(Boolean)
     .join('; ');
 }
+
+/**
+ * Page-side half of the cookie work. Everything a proxied page writes with
+ * `document.cookie` lands on our origin unnamespaced, so the server drops it -
+ * and reads come back wearing the "<domain>~" prefix, which is not the name the
+ * site wrote. Google's bot check is the visible casualty: its script stores
+ * SG_SS, reloads with ?sg_ss=<token>, and the cookie never arrives, so the
+ * reload answers 429. This shim makes document.cookie behave like the target's
+ * own jar - same names in, same names out - and must run before any site script.
+ */
+export function cookieShim(host) {
+  const h = JSON.stringify(String(host).toLowerCase());
+  const ns = JSON.stringify(NS);
+  return String.raw`(function(){
+var H=${h},NS=${ns};
+function ok(d){return H===d||H.endsWith("."+d)}
+var D=Object.getOwnPropertyDescriptor(Document.prototype,"cookie");
+if(!D||!D.get||!D.set)return;
+Object.defineProperty(document,"cookie",{configurable:true,
+get:function(){return String(D.get.call(document)).split(/;\s*/).map(function(c){
+var i=c.indexOf(NS),e=c.indexOf("=");
+if(i<1||e===-1||i>e)return null;
+return ok(c.slice(0,i).toLowerCase())?c.slice(i+NS.length):null}).filter(Boolean).join("; ")},
+set:function(v){var s=String(v),parts=s.split(";"),head=parts.shift(),e=head.indexOf("=");
+if(e<1)return;
+var m=/;\s*domain\s*=\s*\.?([^;]*)/i.exec(s),d=m&&m[1].trim().toLowerCase().replace(/\.+$/,"");
+var attrs=parts.filter(function(p){return !/^\s*(domain|path)\s*=/i.test(p)});
+D.set.call(document,[((d&&ok(d))?d:H)+NS+head.trim(),"Path=/"].concat(attrs).join("; "))}});
+})()`;
+}
+
+/**
+ * Our own /proxy/ referer translated back to the target URL it stands for. Sites
+ * use Referer for hotlink protection and CSRF checks, and Google's bot check
+ * fails on a token-bearing request that arrives without one. "" when the referer
+ * is not a proxy URL (our own UI, say), so nothing about us leaks.
+ */
+export function proxiedReferer(value) {
+  if (!value) return '';
+  const target = validateTarget(targetFromRequestUrl(value));
+  return target.error ? '' : target.url;
+}
+
+// Google search cannot be proxied at all: its own script compares the page's
+// hostname against google.com, does not find it, and the reload it fires answers
+// 429. Bing survives the same treatment, so a Google search is sent there instead.
+// Only /search with a q= is touched - the rest of google.com proxies fine.
+const GOOGLE_HOST = /(^|\.)google(\.[a-z]{2,3}){1,2}$/;
+
+export function swapUnproxyable(href) {
+  let u;
+  try {
+    u = new URL(href);
+  } catch {
+    return href;
+  }
+  if (!GOOGLE_HOST.test(u.hostname) || u.pathname !== '/search') return href;
+  const q = u.searchParams.get('q');
+  return q ? 'https://www.bing.com/search?q=' + encodeURIComponent(q) : href;
+}

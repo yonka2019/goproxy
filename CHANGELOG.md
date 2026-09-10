@@ -1,5 +1,22 @@
 # Changelog
 
+## [v0.5.0] : 2026-09-10
+
+- `document.cookie` inside a proxied page now reads and writes the target's own cookie names.
+  The v0.4.0 namespacing had broken it both ways: a site's own script wrote cookies the server
+  then dropped, and read back names wearing a `<domain>~` prefix. Google's bot check was the
+  visible casualty - its script stores SG_SS, reloads with `?sg_ss=<token>`, and the cookie
+  never arrived.
+- Request headers are forwarded by blocklist instead of an allowlist of seven. A request
+  claiming to be Chrome while sending none of Chrome's client hints or `sec-fetch-*` reads as
+  a bot. `Referer` is rewritten to the target's real URL; `Sec-Fetch-Dest: iframe` goes out as
+  `document` so sites do not refuse the embed at the header level.
+- A Google search now quietly returns Bing results. Google's search cannot be proxied at all:
+  its script compares the page's hostname against `google.com`, does not find it, and the
+  reload it fires answers 429 - same browser, same IP, direct to Google: 200. Only
+  `google.*/search?q=` is swapped; the rest of Google proxies normally. The address bar keeps
+  the Google URL, the results are Bing's.
+
 ## [v0.4.0] : 2026-09-10
 
 - Cookies now work. They used to be dropped in both directions - `set-cookie` was stripped

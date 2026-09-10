@@ -38,11 +38,21 @@ those headers, so it is required — do not "simplify" it away.
   `<base href>` points at the target site and would hijack root-relative ones.
 - The target goes in the **path**, never back into a query parameter. A GET form replaces its
   action's entire query string, which silently deleted `?url=` and broke every search box.
-- `Range` and the conditional headers must stay in `FORWARD_HEADERS`, and `206`/`304`/`204`/
+- `Range` and the conditional headers must keep reaching upstream, and `206`/`304`/`204`/
   `HEAD` must skip rewriting — otherwise video seeking refetches whole files or corrupts.
 - Cookies are namespaced `<domain>~<name>` on our origin and filtered per target host
   (`rewriteSetCookie` / `cookiesForHost`). Never pass them through raw: every site shares
   this one origin, so a raw jar hands site B the session cookies of site A.
+- `cookieShim` is the page-side half and has to stay first in `<head>`: without it a site's
+  own JS writes cookies the server then drops, and reads back names it never wrote.
+- `cookieShim` is built with `String.raw`. A plain template literal eats `\s` and `\.`,
+  which silently turns the shim's regexes into garbage that still parses.
+- Request headers are a **blocklist** (`DROP_HEADERS`), not an allowlist. A request claiming
+  to be Chrome with no `sec-ch-ua` / `sec-fetch-*` is a bot signal. `Referer` is rewritten by
+  `proxiedReferer`, never forwarded raw - it would name this proxy.
+- Google search is out of reach: its script reads the page hostname, does not find
+  `google.com`, and the reload it fires gets a 429. Not a bug to fix, so `swapUnproxyable`
+  answers `google.*/search?q=` with Bing. Only that path - the rest of Google proxies fine.
 - SSRF blocklist in `isBlockedHost` covers loopback/private/link-local/metadata IPs plus
   encoded forms (`2130706433`, `0x7f000001`, `0177.0.0.1`, trailing-dot hosts). Do not loosen it.
 - Redirects are re-validated after `fetch` (`upstream.url`), not only up front.

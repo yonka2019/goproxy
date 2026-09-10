@@ -7,7 +7,7 @@
 // A Worker has one entry script, so routing is explicit; there is no functions/
 // folder to scan the way Cloudflare Pages does.
 
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie } from './lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie, cookieShim, proxiedReferer, swapUnproxyable } from './lib.js';
 
 const TIMEOUT_MS = 15000;
 const CSS_MAX_BYTES = 2 * 1024 * 1024;
@@ -26,17 +26,22 @@ const STRIP_HEADERS = [
   'content-length',
 ];
 
-// Range and the conditional headers are what make video seeking and browser
-// caching work; without them every seek refetches the whole file.
-const FORWARD_HEADERS = [
-  'user-agent',
-  'accept',
-  'accept-language',
-  'range',
-  'if-range',
-  'if-none-match',
-  'if-modified-since',
-];
+// The browser's own headers go upstream, minus these. An allowlist was worse than
+// it looked: a request claiming to be Chrome while sending none of Chrome's client
+// hints or sec-fetch-* is a bot signal, and Range is what makes video seeking work.
+// Anything that would leak the proxy or confuse the fetch is dropped or rewritten.
+const DROP_HEADERS = new Set([
+  'host',
+  'cookie',        // rewritten from our namespaced jar
+  'referer',       // rewritten back to the target's own URL
+  'origin',        // ours would be the proxy, which no target expects
+  'accept-encoding', // the runtime negotiates this; a body we cannot decode cannot be rewritten
+  'content-length',
+  'connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'te', 'trailer',
+  'proxy-authorization', 'proxy-connection',
+  'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'cf-worker', 'cdn-loop',
+  'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-real-ip',
+]);
 
 const SRC_TAGS = 'script[src], img[src], iframe[src], frame[src], source[src], video[src], audio[src], embed[src], input[src], track[src]';
 
@@ -59,23 +64,35 @@ async function handleProxy(request, url) {
   const target = validateTarget(raw);
   if (target.error) return errorPage(target.error, 400);
 
+  // A Google search is quietly answered by Bing; Google's own script refuses to run
+  // anywhere but google.com. Everything else passes straight through.
+  const targetUrl = swapUnproxyable(target.url);
+
   const forwarded = new Headers();
-  for (const name of FORWARD_HEADERS) {
-    const value = request.headers.get(name);
-    if (value) forwarded.set(name, value);
+  for (const [name, value] of request.headers) {
+    if (!DROP_HEADERS.has(name.toLowerCase())) forwarded.set(name, value);
   }
   if (!forwarded.has('user-agent')) forwarded.set('user-agent', 'Mozilla/5.0');
   if (!forwarded.has('accept')) forwarded.set('accept', '*/*');
 
+  // The target's page is a top-level document as far as it is concerned; telling it
+  // "iframe" invites the exact embedding refusal this proxy exists to get around.
+  if (forwarded.get('sec-fetch-dest') === 'iframe') forwarded.set('sec-fetch-dest', 'document');
+
+  // Referer must read as a page on the target, not a /proxy/ URL of ours. Sites use it
+  // for hotlink protection and CSRF checks, and Google's bot check fails without it.
+  const referer = proxiedReferer(request.headers.get('referer'));
+  if (referer) forwarded.set('referer', referer);
+
   // Cookies: without them a site sees every request as a brand-new visitor, so
   // Google answers "cookies are disabled" and no login or consent choice sticks.
   // Only the jar belonging to this host is handed over (see cookiesForHost).
-  const jar = cookiesForHost(request.headers.get('cookie'), new URL(target.url).hostname);
+  const jar = cookiesForHost(request.headers.get('cookie'), new URL(targetUrl).hostname);
   if (jar) forwarded.set('cookie', jar);
 
   let upstream;
   try {
-    upstream = await fetch(target.url, {
+    upstream = await fetch(targetUrl, {
       method: request.method,
       redirect: 'follow',
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -87,7 +104,7 @@ async function handleProxy(request, url) {
   }
 
   // A redirect can land somewhere we would have refused up front.
-  const base = upstream.url || target.url;
+  const base = upstream.url || targetUrl;
   if (validateTarget(base).error) return errorPage('Redirected to a blocked address.', 400);
 
   const headers = new Headers(upstream.headers);
@@ -166,10 +183,14 @@ function rewriteHtml(response, base, origin) {
       },
     })
     // Safety net: anything we missed resolves against the real site instead of us.
-    // Our own rewrites are absolute, so <base> cannot hijack them.
+    // Our own rewrites are absolute, so <base> cannot hijack them. The shim has to
+    // sit ahead of every site script, so it goes in the same prepend.
     .on('head', {
       element(el) {
-        el.prepend(`<base href="${escapeAttr(base)}">`, { html: true });
+        el.prepend(
+          `<script>${cookieShim(new URL(base).hostname)}</script><base href="${escapeAttr(base)}">`,
+          { html: true },
+        );
       },
     })
     .transform(response);

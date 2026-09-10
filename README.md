@@ -38,7 +38,10 @@ with build command `npm run build`.
   action's query string, so `?url=` would be wiped by any search box. `/proxy?url=…` still works.
 - Video seeking, range requests and downloads with real filenames all work.
 - Cookies work. Each one is stored as `<domain>~<name>` on this origin and sent only to hosts
-  that domain covers, so one site cannot read another's session.
+  that domain covers, so one site cannot read another's session. A shim makes `document.cookie`
+  inside a proxied page read and write the target's own names.
+- The browser's headers go upstream almost untouched, with `Referer` rewritten to the target's
+  real URL and `Sec-Fetch-Dest: iframe` sent as `document`.
 
 ## Limits
 
@@ -47,6 +50,10 @@ with build command `npm run build`.
 - ⚠ Cookies are per-site upstream, but every proxied page shares this origin's `document.cookie`,
   so a proxied script can read another site's non-`HttpOnly` cookies. Do not log in to anything you care about.
 - JS-heavy apps that fetch at runtime partly break; static and content sites work.
-- Google search may still show its bot check: one IP for every visitor.
+- Google search is answered by Bing. Google's own script checks the page's hostname, does not
+  find `google.com`, and the reload it fires answers 429 - so `google.*/search?q=` is sent to
+  Bing instead. The rest of Google proxies normally.
+- Cloudflare adds `Cf-Worker:` to every outgoing fetch and a Worker cannot remove it, so
+  bot-checking sites can tell the request came from a Worker.
 - Some sites block proxies outright (chatgpt.com, amazon.com, stackoverflow.com).
 - Requests time out at 15s.
