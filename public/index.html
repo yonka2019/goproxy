@@ -152,6 +152,11 @@ function go(step) {
 
 back.addEventListener('click', () => go(-1));
 forward.addEventListener('click', () => go(1));
+
+// A proxied page that ended up in a browser tab of its own bounces back to
+// "/?u=<target>" (see linkShim), so pick it up and show it in the frame.
+const boot = new URLSearchParams(location.search).get('u');
+if (boot) { input.value = boot; open_(boot); }
 </script>
 </body>
 </html>

@@ -63,6 +63,9 @@ export function encodeTarget(absolute) {
   return absolute.replace(UNSAFE_IN_PATH, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
 }
 
+// Same escape table as encodeTarget, as a snippet the page-side shims share.
+const ENC_JS = String.raw`function enc(u){return u.replace(/[ "'<>` + '`' + String.raw`{}|\^,#]/g,function(c){return "%"+c.charCodeAt(0).toString(16).toUpperCase()})}`;
+
 // Some SDKs refuse to run unless they are served from their own domain. Google's
 // IMA/PAL throws "IMA SDK is either not loaded from a google domain or is not a
 // supported version" and the throw takes the whole React tree with it - 13tv shows
@@ -273,7 +276,7 @@ export function historyShim(base, origin) {
   const o = JSON.stringify(origin);
   return String.raw`(function(){
 var T=${t},O=${o},P="/proxy/";
-function enc(u){return u.replace(/[ "'<>` + '`' + String.raw`{}|\^,#]/g,function(c){return "%"+c.charCodeAt(0).toString(16).toUpperCase()})}
+${ENC_JS}
 function map(u){
 if(u===null||u===undefined||u==="")return u;
 var r;try{r=new URL(String(u),location.href)}catch(e){return u}
@@ -285,5 +288,58 @@ var f=History.prototype[name];
 if(!f)return;
 History.prototype[name]=function(state,title,url){
 return arguments.length<3?f.call(this,state,title):f.call(this,state,title,map(url))}});
+})()`;
+}
+
+/**
+ * Keeps navigation inside the frame. Three ways a click escaped it:
+ * `target="_blank"` opened a bare proxied page in a new browser tab, outside our
+ * UI; `_top`/`_parent` replaced the whole shell; and an anchor a site's own JS
+ * built after load never went through HTMLRewriter at all, so it still pointed at
+ * the real site. A named frame target is left alone - a frameset needs it.
+ *
+ * The first line is the other half: a proxied page that did reach a tab of its
+ * own (a middle-click, a popup we could not catch) sends itself back into the
+ * shell, so there is no way to end up looking at a page without the address bar.
+ */
+export function linkShim(base, origin) {
+  const b = JSON.stringify(base);
+  const t = JSON.stringify(new URL(base).origin);
+  const o = JSON.stringify(origin);
+  return String.raw`(function(){
+var B=${b},T=${t},O=${o},P="/proxy/";
+if(window.top===window.self){location.replace(O+"/?u="+encodeURIComponent(B));return}
+${ENC_JS}
+// Relative hrefs resolve against the injected <base>, which points at the target -
+// the same value the browser itself would use for the click.
+function abs(u){try{return new URL(String(u),document.baseURI||location.href)}catch(e){return null}}
+function map(u){var r=abs(u);
+if(!r||(r.protocol!=="http:"&&r.protocol!=="https:"))return null;
+if(r.origin===O)return r.pathname.indexOf(P)===0?r.href:O+P+enc(T+r.pathname+r.search+r.hash);
+return O+P+enc(r.href)}
+function out(t){return t==="_blank"||t==="_top"||t==="_parent"}
+addEventListener("click",function(e){
+if(e.defaultPrevented||e.button||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
+var p=e.composedPath?e.composedPath():[e.target],a=null,i;
+for(i=0;i<p.length;i++){var n=p[i];
+if(n&&n.getAttribute&&String(n.tagName).toLowerCase()==="a"&&n.getAttribute("href")!==null){a=n;break}}
+if(!a)return;
+var raw=a.getAttribute("href"),r;
+// The injected <base> would send a bare "#x" to the real site; keep it in the page.
+if(raw.charAt(0)==="#"){e.preventDefault();location.hash=raw;return}
+var m=map(raw);
+if(!m||!(r=abs(raw)))return;
+if(r.href!==m)a.setAttribute("href",m);
+if(out((a.getAttribute("target")||"").toLowerCase())){e.preventDefault();location.href=m}},true);
+addEventListener("submit",function(e){
+var f=e.target;
+if(f&&f.getAttribute&&out((f.getAttribute("target")||"").toLowerCase()))f.setAttribute("target","_self")},true);
+var W=window.open;
+window.open=function(u,n,f){
+var act=navigator.userActivation;
+if(act&&!act.isActive)return null;
+var m=u?map(u):null;
+if(m){location.href=m;return window}
+return W?W.call(window,u,n,f):null};
 })()`;
 }

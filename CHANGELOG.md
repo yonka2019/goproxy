@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.7.0] : 2026-09-12
+
+- Links stay inside GoProxy. `target="_blank"` was opening a bare proxied page in a new browser
+  tab, `_top`/`_parent` replaced the whole UI, and a bare `#anchor` went to the real site because
+  the injected `<base>` points there. The server now rewrites those three targets to `_self`, and
+  `linkShim` catches the rest in the page: it keeps a frame-busting click in the frame, scrolls a
+  fragment in place, and proxies anchors a site's own JS built after load, which never went
+  through the rewriter at all.
+- `window.open` navigates the frame instead of opening a tab. A call with no click behind it
+  (`navigator.userActivation`) is refused outright, so a popunder cannot hijack the page.
+- A proxied page that still lands in a tab of its own - a middle-click, a popup we did not catch -
+  sends itself back to `/?u=<target>` and reopens in the UI, so there is no way to end up looking
+  at a page without the address bar.
+
 ## [v0.6.1] : 2026-09-10
 
 - Google's IMA/PAL ad SDK is no longer proxied, along with two doubleclick ad hosts. It checks

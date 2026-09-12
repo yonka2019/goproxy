@@ -45,11 +45,18 @@ those headers, so it is required — do not "simplify" it away.
   this one origin, so a raw jar hands site B the session cookies of site A.
 - `cookieShim` is the page-side half and has to stay first in `<head>`: without it a site's
   own JS writes cookies the server then drops, and reads back names it never wrote.
-- `cookieShim` and `historyShim` are built with `String.raw`. A plain template literal eats
+- The shims are built with `String.raw`. A plain template literal eats
   `\s` and `\.`, which silently turns a shim's regexes into garbage that still parses.
+- `linkShim` keeps clicks in the frame: `_blank`/`_top`/`_parent` targets, `window.open`, links
+  the site's JS built after load (the rewriter only sees the served HTML), and `#anchor` - which
+  the injected `<base>` would otherwise send to the real site. It resolves hrefs against
+  `document.baseURI`, not `location.href`, because that is what the browser's own click uses.
+  A popup with no `navigator.userActivation` behind it is refused, or a popunder ad would
+  navigate the page. Its first line bounces a proxied page that loaded as the top document to
+  `/?u=<target>`; `public/index.html` boots from that parameter.
 - `historyShim` exists because an SPA router passes `own origin + location.pathname` to
   `pushState`; that is cross-origin here, the throw lands in the router and hydration stops
-  (13tv's video player never mounted). Both shims must stay ahead of every site script.
+  (13tv's video player never mounted). All three shims must stay ahead of every site script.
 - Request headers are a **blocklist** (`DROP_HEADERS`), not an allowlist. A request claiming
   to be Chrome with no `sec-ch-ua` / `sec-fetch-*` is a bot signal. `Referer` is rewritten by
   `proxiedReferer`, never forwarded raw - it would name this proxy.

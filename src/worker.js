@@ -7,7 +7,7 @@
 // A Worker has one entry script, so routing is explicit; there is no functions/
 // folder to scan the way Cloudflare Pages does.
 
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie, cookieShim, historyShim, proxiedReferer, swapUnproxyable } from './lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie, cookieShim, historyShim, linkShim, proxiedReferer, swapUnproxyable } from './lib.js';
 
 const TIMEOUT_MS = 15000;
 const CSS_MAX_BYTES = 2 * 1024 * 1024;
@@ -157,6 +157,13 @@ function rewriteHtml(response, base, origin) {
     .on('a[href], area[href], link[href]', attr(['href']))
     .on(SRC_TAGS, attr(['src']))
     .on('form[action]', attr(['action']))
+    // A frame-busting target sends the click to a new browser tab or over our own
+    // UI. A named target belongs to a frameset, so only the three are touched.
+    .on('a[target], area[target], form[target], base[target]', {
+      element(el) {
+        if (/^_(blank|top|parent)$/i.test(el.getAttribute('target') || '')) el.setAttribute('target', '_self');
+      },
+    })
     .on('object[data]', attr(['data']))
     .on('video[poster]', attr(['poster']))
     .on('img[srcset], source[srcset]', {
@@ -188,7 +195,7 @@ function rewriteHtml(response, base, origin) {
     .on('head', {
       element(el) {
         el.prepend(
-          `<script>${cookieShim(new URL(base).hostname)};${historyShim(base, origin)}</script>` +
+          `<script>${linkShim(base, origin)};${cookieShim(new URL(base).hostname)};${historyShim(base, origin)}</script>` +
             `<base href="${escapeAttr(base)}">`,
           { html: true },
         );

@@ -44,6 +44,10 @@ with build command `npm run build`.
   real URL and `Sec-Fetch-Dest: iframe` sent as `document`.
 - `history.pushState` is shimmed so single-page routers do not throw on our path and stop
   hydrating - that is what kept video players from mounting.
+- Clicks stay inside the page. `target="_blank"`/`_top`/`_parent` become `_self`, `window.open`
+  navigates the frame (and is refused with no click behind it), `#anchor` scrolls instead of
+  leaving, and links a site's JS built after load are proxied on click. A proxied page opened in
+  a tab of its own reopens at `/?u=<target>`, back inside the UI.
 
 ## Limits
 

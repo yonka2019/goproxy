@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost, cookieShim, historyShim, proxiedReferer, swapUnproxyable } from '../src/lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost, cookieShim, historyShim, linkShim, proxiedReferer, swapUnproxyable } from '../src/lib.js';
 
 test('validateTarget adds https to a bare domain', () => {
   assert.equal(validateTarget('example.com').url, 'https://example.com/');
@@ -265,4 +265,94 @@ test('proxify leaves SDKs that must stay on their own domain alone', () => {
     proxify('https://imasdk.googleapis.com.evil.test/pal.js', 'https://13tv.co.il/', 'https://p.dev'),
     'https://p.dev/proxy/https://imasdk.googleapis.com.evil.test/pal.js',
   );
+});
+
+// The link shim runs in the page; drive it with stubs the way a browser would.
+function runLinks({ framed = true, base = 'https://s.test/a', origin = 'https://p.test' } = {}) {
+  const handlers = {};
+  const addEventListener = (type, fn) => { handlers[type] = fn; };
+  const location = { href: origin + '/proxy/' + base, hash: '', replace(u) { this.replaced = u; } };
+  const document = { baseURI: base };
+  const navigator = { userActivation: { isActive: true } };
+  const window = { open: () => 'native' };
+  window.self = window;
+  window.top = framed ? {} : window;
+  new Function('window', 'location', 'navigator', 'document', 'addEventListener', linkShim(base, origin))(
+    window, location, navigator, document, addEventListener,
+  );
+  return { handlers, location, window, navigator };
+}
+
+const anchor = (attrs) => ({
+  tagName: 'A',
+  attrs,
+  getAttribute(n) { return n in this.attrs ? this.attrs[n] : null; },
+  setAttribute(n, v) { this.attrs[n] = v; },
+});
+
+function click(handlers, el, extra = {}) {
+  const e = { button: 0, target: el, composedPath: () => [el], prevented: false, preventDefault() { this.prevented = true; }, ...extra };
+  handlers.click(e);
+  return e;
+}
+
+test('linkShim keeps a target="_blank" click inside the frame', () => {
+  const { handlers, location } = runLinks();
+  const a = anchor({ href: 'https://p.test/proxy/https://s.test/b', target: '_blank' });
+  assert.equal(click(handlers, a).prevented, true);
+  assert.equal(location.href, 'https://p.test/proxy/https://s.test/b');
+  // _top and _parent would have replaced the whole UI.
+  for (const target of ['_top', '_parent']) {
+    const l = runLinks();
+    l.handlers.click({ button: 0, target: null, composedPath: () => [anchor({ href: 'https://other.test/x', target })], preventDefault() {} });
+    assert.equal(l.location.href, 'https://p.test/proxy/https://other.test/x', target);
+  }
+});
+
+test('linkShim proxies a link the page built after load', () => {
+  const { handlers, location } = runLinks();
+  const before = location.href;
+
+  // Absolute, and root-relative against the injected <base> - neither went through HTMLRewriter.
+  const a = anchor({ href: 'https://other.test/x' });
+  assert.equal(click(handlers, a).prevented, false);
+  assert.equal(a.attrs.href, 'https://p.test/proxy/https://other.test/x');
+
+  const rel = anchor({ href: '/deep?q=1' });
+  click(handlers, rel);
+  assert.equal(rel.attrs.href, 'https://p.test/proxy/https://s.test/deep?q=1');
+
+  // A link already rewritten by the server is left exactly as it is.
+  const done = anchor({ href: 'https://p.test/proxy/https://s.test/b' });
+  click(handlers, done);
+  assert.equal(done.attrs.href, 'https://p.test/proxy/https://s.test/b');
+  assert.equal(location.href, before); // none of these navigate by hand
+});
+
+test('linkShim leaves other schemes alone and scrolls a fragment in place', () => {
+  const { handlers, location } = runLinks();
+  for (const href of ['mailto:a@b.c', 'tel:+123', 'javascript:void 0']) {
+    const a = anchor({ href });
+    assert.equal(click(handlers, a).prevented, false, href);
+    assert.equal(a.attrs.href, href);
+  }
+  // "#x" under our injected <base> would navigate to the real site instead.
+  const frag = anchor({ href: '#top' });
+  assert.equal(click(handlers, frag).prevented, true);
+  assert.equal(location.hash, '#top');
+});
+
+test('linkShim turns a popup into a navigation, and blocks one with no click behind it', () => {
+  const { window, location, navigator } = runLinks();
+  assert.equal(window.open('https://other.test/x'), window);
+  assert.equal(location.href, 'https://p.test/proxy/https://other.test/x');
+
+  navigator.userActivation.isActive = false; // a popunder firing on its own
+  assert.equal(window.open('https://ad.test/x'), null);
+  assert.equal(location.href, 'https://p.test/proxy/https://other.test/x');
+});
+
+test('linkShim sends a page that escaped into its own tab back to the UI', () => {
+  assert.equal(runLinks({ framed: false }).location.replaced, 'https://p.test/?u=https%3A%2F%2Fs.test%2Fa');
+  assert.equal(runLinks({ framed: true }).location.replaced, undefined);
 });
