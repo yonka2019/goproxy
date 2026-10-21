@@ -65,7 +65,17 @@ those headers, so it is required — do not "simplify" it away.
   answers `google.*/search?q=` with Bing. Only that path - the rest of Google proxies fine.
 - SSRF blocklist in `isBlockedHost` covers loopback/private/link-local/metadata IPs plus
   encoded forms (`2130706433`, `0x7f000001`, `0177.0.0.1`, trailing-dot hosts). Do not loosen it.
-- Redirects are re-validated after `fetch` (`upstream.url`), not only up front.
+- Any method passes through (body buffered). Redirects are `manual`: `Location` is proxified
+  and the browser follows it, so a login 302 keeps its `Set-Cookie` and every hop is
+  re-validated by `validateTarget`. Never switch back to `follow`.
+- `Origin` is rewritten to the referring page's real origin (CSRF checks), only when it is our
+  own; a foreign one becomes `null`. `isCrossSiteWrite` 403s non-GET requests from other sites -
+  without it the rewrite would pass a target's CSRF check for them. Do not remove it.
+- `SameSite=None` is downgraded to `Lax` (server and `cookieShim`) so other sites' requests to
+  us never carry the jar.
+- `linkShim` also maps `fetch`, `XMLHttpRequest.open`, `sendBeacon`, form `action`/
+  `formaction` and `form.submit()` - they resolve against the injected `<base>` and would hit
+  the real site with no cookies. The rewriter covers `formaction` in served HTML.
 
 ## Verify
 

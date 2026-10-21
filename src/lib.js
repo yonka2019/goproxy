@@ -178,8 +178,22 @@ export function rewriteSetCookie(setCookie, host) {
   if (!COOKIE_NAME.test(name)) return null;
   const parts = s.slice(eq + 1).split(';');
   const value = parts.shift().trim();
-  const attrs = parts.map((p) => p.trim()).filter((p) => p && !/^(domain|path)\s*=/i.test(p));
+  // SameSite=None is never needed - every proxied page is same-site with us - and
+  // would let another site's requests to us carry this jar.
+  const attrs = parts
+    .map((p) => p.trim().replace(/^samesite\s*=\s*none$/i, 'SameSite=Lax'))
+    .filter((p) => p && !/^(domain|path)\s*=/i.test(p));
   return [`${cookieDomain(s, host)}${NS}${name}=${value}`, 'Path=/', ...attrs].join('; ');
+}
+
+/**
+ * A state-changing request some other site fired at us. Our Origin rewrite would
+ * pass the target's CSRF check on its behalf, so it is refused instead. Requests
+ * from proxied pages are same-origin here: every site lives on this one origin.
+ */
+export function isCrossSiteWrite(method, origin, fetchSite, ownOrigin) {
+  if (method === 'GET' || method === 'HEAD') return false;
+  return Boolean((origin && origin !== ownOrigin) || (fetchSite && fetchSite !== 'same-origin'));
 }
 
 /** Our namespaced jar -> the Cookie header this host is allowed to see. */
@@ -228,7 +242,7 @@ return ok(c.slice(0,i).toLowerCase())?c.slice(i+NS.length):null}).filter(Boolean
 set:function(v){var s=String(v),parts=s.split(";"),head=parts.shift(),e=head.indexOf("=");
 if(e<1)return;
 var m=/;\s*domain\s*=\s*\.?([^;]*)/i.exec(s),d=m&&m[1].trim().toLowerCase().replace(/\.+$/,"");
-var attrs=parts.filter(function(p){return !/^\s*(domain|path)\s*=/i.test(p)});
+var attrs=parts.filter(function(p){return !/^\s*(domain|path)\s*=/i.test(p)}).map(function(p){return p.replace(/^\s*samesite\s*=\s*none\s*$/i,"SameSite=Lax")});
 D.set.call(document,[((d&&ok(d))?d:H)+NS+head.trim(),"Path=/"].concat(attrs).join("; "))}});
 })()`;
 }
@@ -298,6 +312,9 @@ return arguments.length<3?f.call(this,state,title):f.call(this,state,title,map(u
  * built after load never went through HTMLRewriter at all, so it still pointed at
  * the real site. A named frame target is left alone - a frameset needs it.
  *
+ * Forms, fetch, XHR and sendBeacon go through the same mapping, so a login
+ * posted by markup or by script reaches the site via us, cookies included.
+ *
  * The first line is the other half: a proxied page that did reach a tab of its
  * own (a middle-click, a popup we could not catch) sends itself back into the
  * shell, so there is no way to end up looking at a page without the address bar.
@@ -331,9 +348,25 @@ var m=map(raw);
 if(!m||!(r=abs(raw)))return;
 if(r.href!==m)a.setAttribute("href",m);
 if(out((a.getAttribute("target")||"").toLowerCase())){e.preventDefault();location.href=m}},true);
-addEventListener("submit",function(e){
-var f=e.target;
-if(f&&f.getAttribute&&out((f.getAttribute("target")||"").toLowerCase()))f.setAttribute("target","_self")},true);
+// A form a site's JS built or re-pointed after load would post to the real site.
+function fix(el,name){var v=el&&el.getAttribute&&el.getAttribute(name),m=v?map(v):null;if(m)el.setAttribute(name,m)}
+function form(f,s){if(!f||!f.getAttribute)return;
+if(out((f.getAttribute("target")||"").toLowerCase()))f.setAttribute("target","_self");
+fix(f,"action");fix(s,"formaction")}
+addEventListener("submit",function(e){form(e.target,e.submitter)},true);
+var FP=window.HTMLFormElement&&window.HTMLFormElement.prototype,FS=FP&&FP.submit;
+if(FS)FP.submit=function(){form(this);return FS.call(this)};
+// fetch/XHR resolve against the injected <base> as well, so a login sent by script
+// went straight to the real site: CORS refused it and none of our cookies rode along.
+var F=window.fetch,R=window.Request;
+if(F)window.fetch=function(input,init){var m;
+if(R&&input instanceof R){m=map(input.url);if(m&&m!==input.url)input=new R(m,input)}
+else if(input!=null&&(m=map(input)))input=m;
+return F.call(window,input,init)};
+var XP=window.XMLHttpRequest&&window.XMLHttpRequest.prototype,XO=XP&&XP.open;
+if(XO)XP.open=function(method,url){var a=[].slice.call(arguments),m=map(url);if(m)a[1]=m;return XO.apply(this,a)};
+var SB=navigator.sendBeacon;
+if(SB)navigator.sendBeacon=function(u,d){return SB.call(navigator,map(u)||u,d)};
 var W=window.open;
 window.open=function(u,n,f){
 var act=navigator.userActivation;

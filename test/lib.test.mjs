@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost, cookieShim, historyShim, linkShim, proxiedReferer, swapUnproxyable } from '../src/lib.js';
+import { validateTarget, proxify, proxifySrcset, rewriteCss, isBlockedHost, isInlineType, filenameFrom, targetFromRequestUrl, cookieDomain, rewriteSetCookie, cookiesForHost, isCrossSiteWrite, cookieShim, historyShim, linkShim, proxiedReferer, swapUnproxyable } from '../src/lib.js';
 
 test('validateTarget adds https to a bare domain', () => {
   assert.equal(validateTarget('example.com').url, 'https://example.com/');
@@ -110,7 +110,7 @@ test('targetFromRequestUrl handles collapsed slashes and the legacy query form',
 test('rewriteSetCookie namespaces by domain and takes over the path', () => {
   assert.equal(
     rewriteSetCookie('NID=abc; expires=Fri, 12-Mar-2027 13:04:49 GMT; path=/; domain=.google.com; Secure; HttpOnly; SameSite=none', 'www.google.com'),
-    'google.com~NID=abc; Path=/; expires=Fri, 12-Mar-2027 13:04:49 GMT; Secure; HttpOnly; SameSite=none',
+    'google.com~NID=abc; Path=/; expires=Fri, 12-Mar-2027 13:04:49 GMT; Secure; HttpOnly; SameSite=Lax',
   );
   // No Domain= -> host-only, and a domain the host may not claim is ignored.
   assert.equal(rewriteSetCookie('a=1', 'shop.example.com'), 'shop.example.com~a=1; Path=/');
@@ -268,13 +268,13 @@ test('proxify leaves SDKs that must stay on their own domain alone', () => {
 });
 
 // The link shim runs in the page; drive it with stubs the way a browser would.
-function runLinks({ framed = true, base = 'https://s.test/a', origin = 'https://p.test' } = {}) {
+function runLinks({ framed = true, base = 'https://s.test/a', origin = 'https://p.test', win = {} } = {}) {
   const handlers = {};
   const addEventListener = (type, fn) => { handlers[type] = fn; };
   const location = { href: origin + '/proxy/' + base, hash: '', replace(u) { this.replaced = u; } };
   const document = { baseURI: base };
   const navigator = { userActivation: { isActive: true } };
-  const window = { open: () => 'native' };
+  const window = { open: () => 'native', ...win };
   window.self = window;
   window.top = framed ? {} : window;
   new Function('window', 'location', 'navigator', 'document', 'addEventListener', linkShim(base, origin))(
@@ -355,4 +355,47 @@ test('linkShim turns a popup into a navigation, and blocks one with no click beh
 test('linkShim sends a page that escaped into its own tab back to the UI', () => {
   assert.equal(runLinks({ framed: false }).location.replaced, 'https://p.test/?u=https%3A%2F%2Fs.test%2Fa');
   assert.equal(runLinks({ framed: true }).location.replaced, undefined);
+});
+
+test('linkShim sends script-issued requests through the proxy', () => {
+  const sent = [];
+  class Req { constructor(url, init) { this.url = url; this.init = init; } }
+  function Xhr() {}
+  Xhr.prototype.open = function (method, url) { sent.push(['xhr', method, url]); };
+  const { window } = runLinks({ win: { fetch: (i) => sent.push(['fetch', i]), Request: Req, XMLHttpRequest: Xhr } });
+  window.fetch('/api/login', { method: 'POST' });
+  window.fetch(new Req('https://s.test/api/me'));
+  window.fetch('data:text/plain,hi');
+  new window.XMLHttpRequest().open('POST', 'https://auth.test/token');
+  assert.deepEqual(sent[0], ['fetch', 'https://p.test/proxy/https://s.test/api/login']);
+  assert.equal(sent[1][1].url, 'https://p.test/proxy/https://s.test/api/me');
+  assert.deepEqual(sent[2], ['fetch', 'data:text/plain,hi']);
+  assert.deepEqual(sent[3], ['xhr', 'POST', 'https://p.test/proxy/https://auth.test/token']);
+});
+
+test('linkShim re-points a form the page built, whether submitted by click or by script', () => {
+  const submitted = [];
+  function Form() {}
+  Form.prototype.submit = function () { submitted.push(this.attrs.action); };
+  const { handlers, window } = runLinks({ win: { HTMLFormElement: Form } });
+  const f = Object.assign(Object.create(Form.prototype), anchor({ action: '/login', target: '_top' }));
+  const btn = anchor({ formaction: 'https://auth.test/sso' });
+  handlers.submit({ target: f, submitter: btn });
+  assert.equal(f.attrs.action, 'https://p.test/proxy/https://s.test/login');
+  assert.equal(f.attrs.target, '_self');
+  assert.equal(btn.attrs.formaction, 'https://p.test/proxy/https://auth.test/sso');
+
+  const g = Object.assign(Object.create(Form.prototype), anchor({ action: 'https://s.test/post' }));
+  g.submit();
+  assert.deepEqual(submitted, ['https://p.test/proxy/https://s.test/post']);
+});
+
+test('isCrossSiteWrite refuses another site posting through us, not our own pages', () => {
+  const me = 'https://p.test';
+  assert.equal(isCrossSiteWrite('POST', 'https://evil.test', 'cross-site', me), true);
+  assert.equal(isCrossSiteWrite('POST', null, 'same-site', me), true);
+  assert.equal(isCrossSiteWrite('DELETE', 'https://evil.test', null, me), true); // no sec-fetch-* support
+  assert.equal(isCrossSiteWrite('POST', me, 'same-origin', me), false);
+  assert.equal(isCrossSiteWrite('POST', null, null, me), false); // curl, old clients
+  assert.equal(isCrossSiteWrite('GET', 'https://evil.test', 'cross-site', me), false);
 });

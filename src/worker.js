@@ -2,12 +2,13 @@
 //   /proxy/<absolute url>      -> fetch the target, strip frame-blocking headers,
 //                                 rewrite links so it keeps navigating through here
 //                                 (/proxy?url=... still works for the address bar)
+//                                 any method; redirects go back to the browser
 //   everything else            -> static assets from dist/
 //
 // A Worker has one entry script, so routing is explicit; there is no functions/
 // folder to scan the way Cloudflare Pages does.
 
-import { validateTarget, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie, cookieShim, historyShim, linkShim, proxiedReferer, swapUnproxyable } from './lib.js';
+import { validateTarget, isCrossSiteWrite, proxify, proxifySrcset, rewriteCss, isInlineType, filenameFrom, targetFromRequestUrl, cookiesForHost, rewriteSetCookie, cookieShim, historyShim, linkShim, proxiedReferer, swapUnproxyable } from './lib.js';
 
 const TIMEOUT_MS = 15000;
 const CSS_MAX_BYTES = 2 * 1024 * 1024;
@@ -50,15 +51,16 @@ export default {
     const url = new URL(request.url);
     const isProxy = url.pathname === '/proxy' || url.pathname.startsWith('/proxy/');
     if (!isProxy) return env.ASSETS.fetch(request);
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      return new Response('Method not allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
-    }
     return handleProxy(request, url);
   },
 };
 
 async function handleProxy(request, url) {
   const origin = url.origin;
+  const reqOrigin = request.headers.get('origin');
+  if (isCrossSiteWrite(request.method, reqOrigin, request.headers.get('sec-fetch-site'), origin)) {
+    return errorPage('Cross-site request refused.', 403);
+  }
   const raw = targetFromRequestUrl(request.url);
 
   const target = validateTarget(raw);
@@ -84,17 +86,28 @@ async function handleProxy(request, url) {
   const referer = proxiedReferer(request.headers.get('referer'));
   if (referer) forwarded.set('referer', referer);
 
+  // Ours would name the proxy, and CSRF checks on a login POST compare Origin to the
+  // site's own. Only translated for our own pages; anyone else's becomes "null".
+  if (reqOrigin) forwarded.set('origin', reqOrigin === origin ? new URL(referer || targetUrl).origin : 'null');
+
   // Cookies: without them a site sees every request as a brand-new visitor, so
   // Google answers "cookies are disabled" and no login or consent choice sticks.
   // Only the jar belonging to this host is handed over (see cookiesForHost).
   const jar = cookiesForHost(request.headers.get('cookie'), new URL(targetUrl).hostname);
   if (jar) forwarded.set('cookie', jar);
 
+  // ponytail: body is buffered - a stream would go out chunked with no Content-Length,
+  // which some servers refuse (411). Uploads are capped by Worker memory.
+  const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+
   let upstream;
   try {
     upstream = await fetch(targetUrl, {
       method: request.method,
-      redirect: 'follow',
+      body: hasBody ? await request.arrayBuffer() : undefined,
+      // Followed here, a login's 302 would drop the Set-Cookie carrying the session.
+      // The browser follows it instead, and each hop comes back through validateTarget.
+      redirect: 'manual',
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: forwarded,
     });
@@ -103,15 +116,18 @@ async function handleProxy(request, url) {
     return errorPage(msg, 502);
   }
 
-  // A redirect can land somewhere we would have refused up front.
-  const base = upstream.url || targetUrl;
-  if (validateTarget(base).error) return errorPage('Redirected to a blocked address.', 400);
+  const base = targetUrl;
 
   const headers = new Headers(upstream.headers);
   for (const h of STRIP_HEADERS) headers.delete(h);
   for (const raw of upstream.headers.getSetCookie()) {
     const cookie = rewriteSetCookie(raw, new URL(base).hostname);
     if (cookie) headers.append('set-cookie', cookie);
+  }
+  const location = upstream.headers.get('location');
+  if (location) headers.set('location', proxify(location, base, origin));
+  if (upstream.status >= 300 && upstream.status < 400 && upstream.status !== 304) {
+    return new Response(upstream.body, { status: upstream.status, headers });
   }
   const type = (headers.get('content-type') || '').toLowerCase();
 
@@ -157,6 +173,7 @@ function rewriteHtml(response, base, origin) {
     .on('a[href], area[href], link[href]', attr(['href']))
     .on(SRC_TAGS, attr(['src']))
     .on('form[action]', attr(['action']))
+    .on('button[formaction], input[formaction]', attr(['formaction']))
     // A frame-busting target sends the click to a new browser tab or over our own
     // UI. A named target belongs to a frameset, so only the three are touched.
     .on('a[target], area[target], form[target], base[target]', {

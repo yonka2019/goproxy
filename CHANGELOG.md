@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.8.0] : 2026-10-21
+
+- Site logins work. POST, PUT, PATCH, DELETE and OPTIONS pass through (were 405).
+- Redirects go back to the browser, so a login's 302 keeps its session cookie.
+- `Origin` is rewritten to the site's own, so CSRF checks pass.
+- Writes (POST etc.) fired at GoProxy from another site are refused (403), and `SameSite=None`
+  cookies are stored as `Lax`, so no other site can act on a proxied login.
+- A page's `fetch`, `XHR`, `sendBeacon` and JS-built forms go through the proxy instead of
+  hitting the real site.
+
 ## [v0.7.0] : 2026-09-12
 
 - Links stay inside GoProxy. `target="_blank"` was opening a bare proxied page in a new browser
