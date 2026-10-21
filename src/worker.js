@@ -87,8 +87,9 @@ async function handleProxy(request, url) {
   if (referer) forwarded.set('referer', referer);
 
   // Ours would name the proxy, and CSRF checks on a login POST compare Origin to the
-  // site's own. Only translated for our own pages; anyone else's becomes "null".
-  if (reqOrigin) forwarded.set('origin', reqOrigin === origin ? new URL(referer || targetUrl).origin : 'null');
+  // site's own. Only translated from a proxied Referer of our own pages; never guessed
+  // from the target, or a page that hides its referer could claim any site's origin.
+  if (reqOrigin) forwarded.set('origin', reqOrigin === origin && referer ? new URL(referer).origin : 'null');
 
   // Cookies: without them a site sees every request as a brand-new visitor, so
   // Google answers "cookies are disabled" and no login or consent choice sticks.

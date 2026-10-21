@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.8.1] : 2026-10-21
+
+- A proxied page that hides its referer can no longer pass another site's `Origin` check. The
+  forwarded `Origin` is `null` unless a proxied referer names the real page.
+
 ## [v0.8.0] : 2026-10-21
 
 - Site logins work. POST, PUT, PATCH, DELETE and OPTIONS pass through (were 405).

@@ -69,7 +69,8 @@ those headers, so it is required — do not "simplify" it away.
   and the browser follows it, so a login 302 keeps its `Set-Cookie` and every hop is
   re-validated by `validateTarget`. Never switch back to `follow`.
 - `Origin` is rewritten to the referring page's real origin (CSRF checks), only when it is our
-  own; a foreign one becomes `null`. `isCrossSiteWrite` 403s non-GET requests from other sites -
+  own and a proxied Referer exists; otherwise `null`. Never fall back to the target's origin -
+  a page with `no-referrer` would then pass any other site's Origin check. `isCrossSiteWrite` 403s non-GET requests from other sites -
   without it the rewrite would pass a target's CSRF check for them. Do not remove it.
 - `SameSite=None` is downgraded to `Lax` (server and `cookieShim`) so other sites' requests to
   us never carry the jar.
