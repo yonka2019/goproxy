@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.8.2] : 2026-10-21
+
+- A page that reloads itself no longer downloads as an `.htm` file. The `304` answering the
+  reload was tagged as an attachment, and the browser applied that to the cached page.
+
 ## [v0.8.1] : 2026-10-21
 
 - A proxied page that hides its referer can no longer pass another site's `Origin` check. The

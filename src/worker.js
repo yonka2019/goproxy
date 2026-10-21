@@ -132,19 +132,22 @@ async function handleProxy(request, url) {
   }
   const type = (headers.get('content-type') || '').toLowerCase();
 
+  // 204/304 and HEAD carry no body. Returned before the download naming below: a 304
+  // has no Content-Type, and an attachment header on it gets merged into the cached
+  // page, so a reload downloaded the HTML instead of showing it.
+  const bodyless = request.method === 'HEAD' || upstream.status === 204 || upstream.status === 304;
+  if (bodyless) return new Response(null, { status: upstream.status, headers });
+
   // Downloads: the browser would otherwise name the file after our own path and
-  // save it as "proxy". Only touch types it would not have displayed anyway.
-  if (!headers.has('content-disposition') && !isInlineType(type)) {
+  // save it as "proxy". Only touch types it would not have displayed anyway; with no
+  // type at all the browser sniffs, so leave that to it.
+  if (type && !headers.has('content-disposition') && !isInlineType(type)) {
     const name = filenameFrom(base);
     if (name) headers.set('content-disposition', `attachment; filename="${name.replace(/"/g, '')}"`);
   }
 
-  // 204/304 and HEAD carry no body, and a partial response is a slice of bytes -
-  // rewriting either would corrupt it.
-  const bodyless = request.method === 'HEAD' || upstream.status === 204 || upstream.status === 304;
-  const partial = upstream.status === 206;
-  if (bodyless) return new Response(null, { status: upstream.status, headers });
-  if (partial) return new Response(upstream.body, { status: 206, headers });
+  // A partial response is a slice of bytes - rewriting it would corrupt it.
+  if (upstream.status === 206) return new Response(upstream.body, { status: 206, headers });
 
   if (type.includes('text/html')) {
     return rewriteHtml(new Response(upstream.body, { status: upstream.status, headers }), base, origin);

@@ -40,6 +40,8 @@ those headers, so it is required — do not "simplify" it away.
   action's entire query string, which silently deleted `?url=` and broke every search box.
 - `Range` and the conditional headers must keep reaching upstream, and `206`/`304`/`204`/
   `HEAD` must skip rewriting — otherwise video seeking refetches whole files or corrupts.
+  Bodyless responses also return before the `content-disposition` naming: a `304` has no
+  type, and an `attachment` on it is merged into the cached page, so a reload downloads it.
 - Cookies are namespaced `<domain>~<name>` on our origin and filtered per target host
   (`rewriteSetCookie` / `cookiesForHost`). Never pass them through raw: every site shares
   this one origin, so a raw jar hands site B the session cookies of site A.
